@@ -362,11 +362,64 @@ function alumnoCalifCard(alumno, rubros, calRows) {
       const vals = porRubro[r.rubro];
       const prom = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '—';
       return `<div class="row between" style="margin-top:8px;">
-        <span class="muted">${esc(r.rubro)} (${r.porcentaje}%) · prom. ${prom} · ${vals.length} evid.</span>
+        <span class="muted" ${vals.length ? `onclick="verEvidencias('${alumno.id}','${attrJs(r.rubro)}')" style="text-decoration:underline; cursor:pointer;"` : ''}>${esc(r.rubro)} (${r.porcentaje}%) · prom. ${prom} · ${vals.length} evid.</span>
         <button class="btn small secondary" onclick="abrirCapturaEvidencia('${alumno.id}','${attrJs(r.rubro)}')">+ Evidencia</button>
       </div>`;
     }).join('')}
   </div>`;
+}
+function verEvidencias(alumnoId, rubro) {
+  const rows = Store.data.Calificaciones.concat(Store.queue.Calificaciones)
+    .filter(c => c.alumnoId === alumnoId && c.rubro === rubro && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const alumno = Store.data.Alumnos.find(a => a.id === alumnoId);
+  openModal(`
+    <h2>${esc(rubro)}</h2>
+    <p class="muted">${esc(alumno ? alumno.nombre : '')}</p>
+    ${rows.map(r => `
+      <div class="card-flat row between">
+        <div><strong>${r.valor}</strong> — ${esc(r.evidencia || 'sin descripción')}<br><span class="muted">${esc(r.fecha)}</span></div>
+        <div class="row">
+          <button class="btn small ghost" onclick="editarEvidencia('${r.id}')">Editar</button>
+          <button class="btn small ghost" style="color:var(--danger);" onclick="borrarEvidencia('${r.id}','${alumnoId}','${attrJs(rubro)}')">✕</button>
+        </div>
+      </div>`).join('')}
+  `);
+}
+function editarEvidencia(id) {
+  const row = Store.data.Calificaciones.concat(Store.queue.Calificaciones).find(c => c.id === id);
+  if (!row) return;
+  openModal(`
+    <h2>Editar evidencia</h2>
+    <p class="muted">${esc(row.rubro)} · ${esc(row.trimestre)}</p>
+    <div class="field"><label>Descripción</label><input id="evDesc" value="${esc(row.evidencia)}"></div>
+    <div class="field"><label>Calificación (0–10)</label><input id="evValor" type="number" min="0" max="10" step="0.1" value="${row.valor}"></div>
+    <div class="field"><label>Fecha</label><input id="evFecha" type="date" value="${row.fecha}"></div>
+    <button class="btn block" onclick="guardarEdicionEvidencia('${id}')">Guardar cambios</button>
+  `);
+}
+function guardarEdicionEvidencia(id) {
+  const valor = parseFloat(document.getElementById('evValor').value);
+  if (isNaN(valor) || valor < 0 || valor > 10) { toast('Calificación inválida (0–10)'); return; }
+  let row = Store.data.Calificaciones.find(c => c.id === id) || Store.queue.Calificaciones.find(c => c.id === id);
+  if (!row) return;
+  row.valor = valor;
+  row.evidencia = document.getElementById('evDesc').value;
+  row.fecha = document.getElementById('evFecha').value;
+  Store.enqueue('Calificaciones', row); // upsert por id, sobreescribe en el Sheet
+  Store.persist();
+  closeModal();
+  toast('Evidencia actualizada');
+  syncPending();
+  renderCurrentView();
+}
+async function borrarEvidencia(id, alumnoId, rubro) {
+  Store.data.Calificaciones = Store.data.Calificaciones.filter(c => c.id !== id);
+  Store.queue.Calificaciones = Store.queue.Calificaciones.filter(c => c.id !== id);
+  Store.persist();
+  toast('Evidencia borrada');
+  try { await jsonp('deleteCalificacion', { id }); } catch (e) {}
+  verEvidencias(alumnoId, rubro);
+  renderCurrentView();
 }
 function abrirCapturaEvidencia(alumnoId, rubro) {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
