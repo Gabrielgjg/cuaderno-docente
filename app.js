@@ -186,6 +186,7 @@ const NAV = [
   { id: 'asistencia', label: 'Asistencia', icon: iconCheck },
   { id: 'calificaciones', label: 'Calif.', icon: iconStar },
   { id: 'diario', label: 'Diario', icon: iconBook },
+  { id: 'clase', label: 'Clase', icon: iconDice },
   { id: 'admin', label: 'Admin', icon: iconSettings }
 ];
 let currentView = 'dashboard';
@@ -196,6 +197,7 @@ function iconCheck(){return '<svg viewBox="0 0 24 24" fill="none" stroke="curren
 function iconStar(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18.5 21 12 16.5 5.5 21 7.5 13.5 2 9h7z"/></svg>';}
 function iconBook(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h11a3 3 0 013 3v13H7a3 3 0 01-3-3V4z"/><path d="M4 4v13a3 3 0 003 3"/></svg>';}
 function iconSettings(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09A1.65 1.65 0 0015 4.6a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';}
+function iconDice(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="16" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="16" r="1.2" fill="currentColor"/><circle cx="16" cy="16" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>';}
 
 function renderNav() {
   document.getElementById('bottomnav').innerHTML = NAV.map(n => `
@@ -205,9 +207,9 @@ function renderNav() {
 }
 function goTo(id) { currentView = id; renderNav(); renderCurrentView(); }
 function renderCurrentView() {
-  const titles = { dashboard: 'Cuaderno Docente', asistencia: 'Pase de lista', calificaciones: 'Calificaciones', diario: 'Diario docente', admin: 'Administración' };
+  const titles = { dashboard: 'Cuaderno Docente', asistencia: 'Pase de lista', calificaciones: 'Calificaciones', diario: 'Diario docente', clase: 'Herramientas de clase', admin: 'Administración' };
   document.getElementById('viewTitle').textContent = titles[currentView];
-  const fns = { dashboard: viewDashboard, asistencia: viewAsistencia, calificaciones: viewCalificaciones, diario: viewDiario, admin: viewAdmin };
+  const fns = { dashboard: viewDashboard, asistencia: viewAsistencia, calificaciones: viewCalificaciones, diario: viewDiario, clase: viewClase, admin: viewAdmin };
   renderContextRow();
   document.getElementById('views').innerHTML = `<div class="view active">${fns[currentView]()}</div>`;
 }
