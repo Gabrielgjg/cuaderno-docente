@@ -232,7 +232,7 @@ function actualizarTotalPreview() {
   const el = document.getElementById('encTotalPreview');
   if (el) { el.textContent = 'Total: ' + total + '%'; el.className = 'encuadre-total ' + (total === 100 ? 'good' : 'bad'); }
 }
-function guardarEncuadre(asignaturaExistente) {
+async function guardarEncuadre(asignaturaExistente) {
   const asignatura = document.getElementById('eAsignatura').value.trim();
   const trimestre = document.getElementById('eTrimestre').value;
   if (!asignatura) { toast('Indica la asignatura'); return; }
@@ -245,17 +245,23 @@ function guardarEncuadre(asignaturaExistente) {
   });
   const total = rows.reduce((s, r) => s + r.porcentaje, 0);
   if (total !== 100) { toast('Los porcentajes deben sumar 100% (van en ' + total + '%)'); return; }
-  // elimina encuadre previo de esta asignatura+trimestre y guarda el nuevo set
+
+  // Reemplazo local inmediato (por si no hay conexión)
   Store.data.Encuadres = Store.data.Encuadres.filter(e => !(e.asignatura === asignatura && e.trimestre === trimestre));
   rows.forEach(r => {
-    const row = { id: uid(), asignatura, trimestre, cicloEscolar: CONFIG.CICLO, rubro: r.rubro, porcentaje: r.porcentaje, activo: true };
-    Store.data.Encuadres.push(row);
-    jsonp('saveEncuadre', { data: JSON.stringify(row) }).catch(() => {});
+    Store.data.Encuadres.push({ id: uid(), asignatura, trimestre, cicloEscolar: CONFIG.CICLO, rubro: r.rubro, porcentaje: r.porcentaje, activo: true });
   });
   Store.persist();
   closeModal();
   toast('Encuadre guardado');
   renderCurrentView();
+
+  // Reemplazo real en el Sheet: borra las filas viejas de esta asignatura+trimestre
+  // (sin importar cuántos intentos anteriores hayan quedado) y escribe las nuevas.
+  try {
+    await jsonp('replaceEncuadre', { data: JSON.stringify({ asignatura, trimestre, cicloEscolar: CONFIG.CICLO, rubros: rows }) });
+    await refreshFromServer();
+  } catch (e) { /* se reintentará en el próximo refresh manual */ }
 }
 
 /* ---------------- IMPORTAR (CSV / Excel exportado + OCR con cámara) ---------------- */
