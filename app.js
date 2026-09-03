@@ -277,7 +277,10 @@ function viewAsistencia() {
   return `
     <div class="row between" style="margin-bottom:10px;">
       <span class="muted">${alumnos.length} alumnos · ${ctx.fecha}</span>
-      <button class="btn small" onclick="marcarTodosPresente()">Todos presentes</button>
+      <div class="row">
+        <button class="btn small ghost" onclick="verResumenAsistencia()">Ver resumen</button>
+        <button class="btn small" onclick="marcarTodosPresente()">Todos presentes</button>
+      </div>
     </div>
     <div id="rosterList">
       ${alumnos.map(a => rosterRow(a, existentes[a.id])).join('')}
@@ -285,13 +288,42 @@ function viewAsistencia() {
     <button class="btn block" style="margin-top:14px;" onclick="guardarAsistencia()">Guardar pase de lista</button>
   `;
 }
+function contarAsistencia(alumnoId) {
+  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
+  Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => {
+    if (r.alumnoId === alumnoId && counts[r.estatus] !== undefined) counts[r.estatus]++;
+  });
+  return counts;
+}
 function rosterRow(a, estatusActual) {
+  const c = contarAsistencia(a.id);
   return `<div class="roster-item" data-alumno="${a.id}">
-    <span class="roster-name">${esc(a.nombre)}</span>
+    <div class="roster-name">${esc(a.nombre)}<br>
+      <span class="muted" style="font-size:.72rem; font-weight:400;">P:${c.Presente} · A:${c.Ausente} · R:${c.Retardo} · J:${c.Justificado}</span>
+    </div>
     <div class="status-btns">
       ${ESTATUS_ASISTENCIA.map(s => `<button class="stat ${estatusActual === s ? 'on' : ''}" data-s="${s}" onclick="setEstatus('${a.id}','${s}',this)">${s[0]}</button>`).join('')}
     </div>
   </div>`;
+}
+function verResumenAsistencia() {
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const rows = alumnos.map(a => {
+    const c = contarAsistencia(a.id);
+    const total = c.Presente + c.Ausente + c.Retardo + c.Justificado;
+    const pct = total ? Math.round((c.Presente / total) * 100) : 0;
+    return { nombre: a.nombre, ...c, total, pct };
+  });
+  openModal(`
+    <h2>Resumen de asistencia</h2>
+    <p class="muted">Grupo completo · todas las fechas registradas</p>
+    <table>
+      <thead><tr><th>Alumno</th><th>P</th><th>A</th><th>R</th><th>J</th><th>%</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr><td>${esc(r.nombre)}</td><td>${r.Presente}</td><td>${r.Ausente}</td><td>${r.Retardo}</td><td>${r.Justificado}</td><td>${r.total ? r.pct + '%' : '—'}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  `);
 }
 function setEstatus(alumnoId, estatus, btn) {
   btn.parentElement.querySelectorAll('.stat').forEach(b => b.classList.remove('on'));
