@@ -8,11 +8,12 @@ function viewAdmin() {
   const tabs = [
     { id: 'grupos', label: 'Grupos' },
     { id: 'alumnos', label: 'Alumnos' },
+    { id: 'perfil', label: 'Perfil' },
     { id: 'encuadres', label: 'Encuadres' },
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, encuadres: adminEncuadres, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -72,17 +73,28 @@ function guardarGrupo(id) {
 }
 
 /* ---------------- ALUMNOS ---------------- */
+let alumnosFiltro = { texto: '', grupoId: '' };
 function adminAlumnos() {
   const grupos = Store.data.Grupos;
-  const alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE')
+  const gruposActivos = Store.activeGrupos();
+  let alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE')
     .slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
+  if (alumnosFiltro.texto) alumnos = alumnos.filter(a => a.nombre.toLowerCase().includes(alumnosFiltro.texto.toLowerCase()));
+  if (alumnosFiltro.grupoId) alumnos = alumnos.filter(a => a.grupoId === alumnosFiltro.grupoId);
   const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
   return `
     <button class="btn block secondary" onclick="modalAlumno()">+ Nuevo alumno</button>
+    <div class="row" style="margin-top:10px;">
+      <input id="alumFiltroTexto" placeholder="Buscar por nombre…" value="${esc(alumnosFiltro.texto)}" oninput="alumnosFiltro.texto=this.value; renderCurrentView();" style="flex:1; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+      <select id="alumFiltroGrupo" onchange="alumnosFiltro.grupoId=this.value; renderCurrentView();" style="padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+        <option value="">Todos los grupos</option>
+        ${gruposActivos.map(g => `<option value="${g.id}" ${alumnosFiltro.grupoId === g.id ? 'selected' : ''}>${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+      </select>
+    </div>
     <div style="margin-top:10px;">
-    ${alumnos.length === 0 ? '<p class="muted">Sin alumnos aún. Usa "Importar" para cargar desde Excel/CSV o cámara.</p>' : alumnos.map(a => `
+    ${alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
       <div class="card-flat row between">
-        <div><strong>${esc(a.nombre)}</strong><br><span class="muted">${grupoName(a.grupoId)}</span></div>
+        <div><strong>${esc(a.nombre)}</strong>${a.notas ? ' <span class="tag">nota</span>' : ''}<br><span class="muted">${grupoName(a.grupoId)}</span></div>
         <div class="row">
           <button class="btn small ghost" onclick="abrirNuevaIncidencia('${a.id}','${attrJs(a.nombre)}','${a.grupoId}')">Incidencia</button>
           <button class="btn small ghost" onclick="modalAlumno('${a.id}')">Editar</button>
@@ -100,6 +112,7 @@ function modalAlumno(id) {
     <div class="field"><label>Grupo</label>
       <select id="aGrupo">${grupos.map(g => `<option value="${g.id}" ${a && a.grupoId === g.id ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}</select>
     </div>
+    ${a ? `<div class="field"><label>Notas particulares (solo para ti)</label><textarea id="aNotas" placeholder="Ej. alergias, acuerdos con el padre, seguimiento especial…">${esc(a.notas)}</textarea></div>` : ''}
     <button class="btn block" onclick="guardarAlumno(${a ? `'${a.id}'` : 'null'})">Guardar</button>
     ${a ? `<div class="divider"></div>
       <button class="btn block secondary" onclick="modalMigrar('${a.id}')">Cambiar de grupo (migrar)</button>
@@ -110,11 +123,13 @@ function guardarAlumno(id) {
   const nombre = document.getElementById('aNombre').value.trim();
   const grupoId = document.getElementById('aGrupo').value;
   if (!nombre || !grupoId) { toast('Nombre y grupo son obligatorios'); return; }
+  const existente = id ? Store.data.Alumnos.find(x => x.id === id) : null;
   const row = {
     id: id || uid(), nombre, matricula: document.getElementById('aMatricula').value.trim(),
-    grupoId, activo: true
+    grupoId, activo: true,
+    notas: id ? document.getElementById('aNotas').value : '',
+    historialGrupos: existente ? existente.historialGrupos : '[]'
   };
-  if (!id) row.historialGrupos = '[]';
   Store.upsertLocal('Alumnos', row);
   Store.enqueue('Alumnos', row);
   Store.persist();
@@ -171,6 +186,87 @@ async function darDeBajaUI(alumnoId) {
   toast('Alumno dado de baja');
   try { await jsonp('bajaAlumno', { data: JSON.stringify({ alumnoId, fecha: a.fechaBaja }) }); } catch (e) {}
   renderCurrentView();
+}
+
+/* ---------------- PERFIL DE ALUMNO ---------------- */
+let perfilFiltro = '';
+let perfilAlumnoId = null;
+function adminPerfil() {
+  const grupos = Store.data.Grupos;
+  let alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE').slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
+  if (perfilFiltro) alumnos = alumnos.filter(a => a.nombre.toLowerCase().includes(perfilFiltro.toLowerCase()));
+  const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
+  return `
+    <input id="perfilBuscar" placeholder="Buscar alumno por nombre…" value="${esc(perfilFiltro)}" oninput="perfilFiltro=this.value; renderCurrentView();" style="width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); margin-bottom:10px;">
+    ${!perfilAlumnoId || !alumnos.find(a => a.id === perfilAlumnoId) ? `
+      <div style="max-height:340px; overflow-y:auto;">
+        ${alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
+          <div class="card-flat row between" style="cursor:pointer;" onclick="perfilAlumnoId='${a.id}'; renderCurrentView();">
+            <div><strong>${esc(a.nombre)}</strong><br><span class="muted">${grupoName(a.grupoId)}</span></div>
+            <span class="muted">Ver →</span>
+          </div>`).join('')}
+      </div>` : renderPerfilDetalle(alumnos.find(a => a.id === perfilAlumnoId))}
+  `;
+}
+function renderPerfilDetalle(a) {
+  const grupo = Store.data.Grupos.find(g => g.id === a.grupoId);
+  const asistAll = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.alumnoId === a.id);
+  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
+  asistAll.forEach(r => { if (counts[r.estatus] !== undefined) counts[r.estatus]++; });
+  const totalAsist = asistAll.length;
+  const pct = totalAsist ? Math.round((counts.Presente / totalAsist) * 100) : 0;
+
+  const incidencias = Store.data.Incidencias.concat(Store.queue.Incidencias).filter(r => r.alumnoId === a.id)
+    .sort((x, y) => y.fecha.localeCompare(x.fecha));
+  const diarioGrupo = Store.data.Diario.concat(Store.queue.Diario).filter(r => r.grupoId === a.grupoId)
+    .sort((x, y) => y.fecha.localeCompare(x.fecha)).slice(0, 15);
+
+  const califHtml = grupo ? TRIMESTRES.map(tri => {
+    const rubros = Store.encuadre(grupo.asignatura, tri);
+    if (rubros.length === 0) return '';
+    const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.alumnoId === a.id && c.trimestre === tri);
+    let final = 0;
+    const detalle = rubros.map(r => {
+      const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
+      const prom = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
+      if (vals.length) final += prom * (Number(r.porcentaje) / 100);
+      return `${esc(r.rubro)}: ${vals.length ? prom.toFixed(1) : '—'}`;
+    }).join(' · ');
+    return `<div class="card-flat row between"><span>${esc(tri)}<br><span class="muted" style="font-size:.78rem;">${detalle}</span></span><span class="tag">${final.toFixed(1)}</span></div>`;
+  }).join('') : '<p class="muted">Este grupo no tiene asignatura/encuadre configurado.</p>';
+
+  return `
+    <button class="btn small ghost" onclick="perfilAlumnoId=null; renderCurrentView();">← Buscar otro alumno</button>
+    <div class="card" style="margin-top:10px;">
+      <h2>${esc(a.nombre)}</h2>
+      <p class="muted">${grupo ? `${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}` : 'Sin grupo'}${a.matricula ? ' · Matrícula: ' + esc(a.matricula) : ''}</p>
+    </div>
+
+    <h3>Asistencia</h3>
+    <div class="card row between">
+      <div><div class="muted">Presente</div><h2 style="color:var(--ok);">${counts.Presente}</h2></div>
+      <div><div class="muted">Ausente</div><h2 style="color:var(--danger);">${counts.Ausente}</h2></div>
+      <div><div class="muted">Retardo</div><h2 style="color:var(--warn);">${counts.Retardo}</h2></div>
+      <div><div class="muted">Justif.</div><h2 style="color:var(--just);">${counts.Justificado}</h2></div>
+      <div><div class="muted">%</div><h2>${totalAsist ? pct + '%' : '—'}</h2></div>
+    </div>
+
+    <h3>Calificaciones</h3>
+    ${califHtml}
+
+    <h3>Incidencias (${incidencias.length})</h3>
+    ${incidencias.length === 0 ? '<p class="muted">Sin incidencias registradas.</p>' :
+      incidencias.map(i => `<div class="diary-entry"><div class="diary-type">${esc(i.tipo)} · ${esc(i.fecha)}</div><div>${esc(i.descripcion)}</div></div>`).join('')}
+    <button class="btn small secondary" onclick="abrirNuevaIncidencia('${a.id}','${attrJs(a.nombre)}','${a.grupoId}')">+ Nueva incidencia</button>
+
+    <h3 style="margin-top:16px;">Diario del grupo (últimas ${diarioGrupo.length})</h3>
+    ${diarioGrupo.length === 0 ? '<p class="muted">Sin entradas de diario para este grupo.</p>' :
+      diarioGrupo.map(d => `<div class="diary-entry"><div class="diary-type">${esc(d.tipo)} · ${esc(d.fecha)}</div><div>${esc(d.texto)}</div></div>`).join('')}
+
+    <h3 style="margin-top:16px;">Notas particulares</h3>
+    ${a.notas ? `<div class="card-flat">${esc(a.notas)}</div>` : '<p class="muted">Sin notas.</p>'}
+    <button class="btn small ghost" onclick="modalAlumno('${a.id}')">Editar notas</button>
+  `;
 }
 
 /* ---------------- ENCUADRES ---------------- */
