@@ -15,7 +15,7 @@ function viewAdmin() {
   ];
   const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, importar: adminImportar, config: adminConfig };
   return `
-    <div class="chip-list">
+    <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
     </div>
     ${fns[adminTab]()}
@@ -236,7 +236,8 @@ function renderPerfilDetalle(a) {
   }).join('') : '<p class="muted">Este grupo no tiene asignatura/encuadre configurado.</p>';
 
   return `
-    <button class="btn small ghost" onclick="perfilAlumnoId=null; renderCurrentView();">← Buscar otro alumno</button>
+    <button class="btn small ghost no-print" onclick="perfilAlumnoId=null; renderCurrentView();">← Buscar otro alumno</button>
+    <button class="btn small secondary no-print" onclick="window.print()">Imprimir / PDF</button>
     <div class="card" style="margin-top:10px;">
       <h2>${esc(a.nombre)}</h2>
       <p class="muted">${grupo ? `${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}` : 'Sin grupo'}${a.matricula ? ' · Matrícula: ' + esc(a.matricula) : ''}</p>
@@ -250,7 +251,7 @@ function renderPerfilDetalle(a) {
       <div><div class="muted">Justif.</div><h2 style="color:var(--just);">${counts.Justificado}</h2></div>
       <div><div class="muted">%</div><h2>${totalAsist ? pct + '%' : '—'}</h2></div>
     </div>
-    ${totalAsist ? `<div class="card"><canvas id="chartPerfilAsistencia" height="180"></canvas></div>` : ''}
+    ${totalAsist ? `<div class="card chart-box"><canvas id="chartPerfilAsistencia"></canvas></div>` : ''}
 
     <h3>Calificaciones</h3>
     ${califHtml}
@@ -280,7 +281,7 @@ function renderPerfilChart() {
   chartInstances.chartPerfilAsistencia = new Chart(el, {
     type: 'doughnut',
     data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: Object.keys(counts).map(k => CHART_COLORS[k]) }] },
-    options: { plugins: { legend: { position: 'bottom' } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
   });
 }
 
