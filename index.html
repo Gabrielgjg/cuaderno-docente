@@ -155,6 +155,17 @@
   .encuadre-total{font-weight:700;}
   .encuadre-total.bad{color:var(--danger);}
   .encuadre-total.good{color:var(--ok);}
+  .chart-box{position:relative; height:240px;}
+  @media(min-width:640px){ .chart-box{height:280px;} }
+
+  @media print{
+    .bottomnav, .topbar select, .topbar input, .btn, .sync-dot, .no-print{display:none !important;}
+    body{background:#fff;}
+    .view{padding:0;}
+    .chart-box{height:260px; page-break-inside:avoid;}
+    .card, .card-flat{page-break-inside:avoid; box-shadow:none; border:1px solid #ccc;}
+    #printHeader{display:block !important; border:none; padding:0 0 10px;}
+  }
 
   .chip-list{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;}
   .chip{padding:6px 12px; border-radius:20px; border:1px solid var(--line); font-size:.82rem; background:var(--paper-raised); color:var(--ink-soft); font-weight:500;}
