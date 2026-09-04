@@ -1,5 +1,5 @@
-const CACHE = 'cuaderno-docente-v5';
-const SHELL = ['./', './index.html', './app.js', './admin.js', './classroom.js', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'cuaderno-docente-v6';
+const SHELL = ['./', './index.html', './app.js', './admin.js', './classroom.js', './chart.umd.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
