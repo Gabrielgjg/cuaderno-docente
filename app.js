@@ -300,6 +300,13 @@ function postRenderHooks() {
   }
 }
 function renderDashboardCharts() {
+  if (typeof Chart === 'undefined') {
+    ['chartAsistenciaGrupo', 'chartEntregas', 'chartDistribucion'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.parentElement.innerHTML = '<p class="muted">No se pudo cargar la librería de gráficas. Verifica tu conexión y recarga.</p>';
+    });
+    return;
+  }
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return;
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
