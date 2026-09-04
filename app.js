@@ -379,7 +379,7 @@ function viewAsistencia() {
 
   const existentes = {};
   Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => {
-    if (r.grupoId === ctx.grupoId && r.fecha === ctx.fecha) existentes[r.alumnoId] = r.estatus;
+    if (r.grupoId === ctx.grupoId && r.fecha === ctx.fecha) existentes[r.alumnoId] = r;
   });
 
   return `
@@ -393,7 +393,7 @@ function viewAsistencia() {
     <div id="rosterList">
       ${alumnos.map(a => rosterRow(a, existentes[a.id])).join('')}
     </div>
-    <button class="btn block" style="margin-top:14px;" onclick="guardarAsistencia()">Guardar pase de lista</button>
+    <button class="btn block" style="margin-top:14px;" onclick="guardarAsistencia()">${Object.keys(existentes).length ? 'Guardar cambios' : 'Guardar pase de lista'}</button>
   `;
 }
 function contarAsistencia(alumnoId) {
@@ -403,9 +403,10 @@ function contarAsistencia(alumnoId) {
   });
   return counts;
 }
-function rosterRow(a, estatusActual) {
+function rosterRow(a, registro) {
   const c = contarAsistencia(a.id);
-  return `<div class="roster-item" data-alumno="${a.id}">
+  const estatusActual = registro ? registro.estatus : null;
+  return `<div class="roster-item" data-alumno="${a.id}" data-registro="${registro ? registro.id : ''}">
     <div class="roster-name">${esc(a.nombre)}<br>
       <span class="muted" style="font-size:.72rem; font-weight:400;">P:${c.Presente} · A:${c.Ausente} · R:${c.Retardo} · J:${c.Justificado}</span>
     </div>
@@ -449,8 +450,9 @@ function guardarAsistencia() {
   document.querySelectorAll('#rosterList .roster-item').forEach(item => {
     const on = item.querySelector('.stat.on');
     if (!on) return;
+    const registroId = item.dataset.registro;
     rows.push({
-      id: uid(), alumnoId: item.dataset.alumno, grupoId: ctx.grupoId,
+      id: registroId || uid(), alumnoId: item.dataset.alumno, grupoId: ctx.grupoId,
       fecha: ctx.fecha, estatus: on.dataset.s, observacion: ''
     });
   });
