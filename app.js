@@ -212,13 +212,23 @@ function renderCurrentView() {
   const fns = { dashboard: viewDashboard, asistencia: viewAsistencia, calificaciones: viewCalificaciones, diario: viewDiario, clase: viewClase, admin: viewAdmin };
   renderContextRow();
   document.getElementById('views').innerHTML = `<div class="view active">${fns[currentView]()}</div>`;
+  postRenderHooks();
 }
 
 function renderContextRow() {
   const row = document.getElementById('contextRow');
-  if (currentView === 'dashboard') { row.innerHTML = ''; return; }
   if (currentView === 'admin') { row.innerHTML = ''; return; }
   const grupos = Store.activeGrupos();
+  if (currentView === 'dashboard') {
+    row.innerHTML = `<select id="ctxGrupo" onchange="ctx.grupoId=this.value; renderCurrentView();">
+        <option value="">Panorama general (todos los grupos)</option>
+        ${grupos.map(g => `<option value="${g.id}" ${ctx.grupoId === g.id ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+      </select>
+      ${ctx.grupoId ? `<select id="ctxTrimestre" onchange="ctx.trimestre=this.value; renderCurrentView();">
+          ${TRIMESTRES.map(t => `<option ${ctx.trimestre === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>` : ''}`;
+    return;
+  }
   let html = `<select id="ctxGrupo" onchange="ctx.grupoId=this.value; renderCurrentView();">
       <option value="">Selecciona grupo…</option>
       ${grupos.map(g => `<option value="${g.id}" ${ctx.grupoId === g.id ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
@@ -238,6 +248,7 @@ function renderContextRow() {
    DASHBOARD
    ================================================================ */
 function viewDashboard() {
+  if (ctx.grupoId) return viewDashboardGrupo();
   const grupos = Store.activeGrupos();
   const totalAlumnos = Store.data.Alumnos.filter(a => a.activo === true || a.activo === 'TRUE' || a.activo === 'VERDADERO').length;
   const pend = Store.pendingCount();
@@ -252,6 +263,7 @@ function viewDashboard() {
     <div class="card"><div class="row between"><div><div class="muted">Grupos activos</div><h2>${grupos.length}</h2></div>
       <div><div class="muted">Alumnos</div><h2>${totalAlumnos}</h2></div>
       <div><div class="muted">Por sincronizar</div><h2 style="color:${pend ? 'var(--warn)' : 'var(--ok)'}">${pend}</h2></div></div></div>
+    <p class="muted" style="text-align:center; margin:6px 0 12px;">Selecciona un grupo arriba para ver sus estadísticas</p>
     <h3>Grupos</h3>
     ${grupos.map(g => `
       <div class="card-flat row between">
@@ -261,6 +273,89 @@ function viewDashboard() {
     <div class="divider"></div>
     <button class="btn block secondary" onclick="refreshFromServer()">Actualizar datos del servidor</button>
   `;
+}
+function viewDashboardGrupo() {
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  if (!grupo) return '';
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
+  return `
+    <div class="card-flat muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</div>
+    <h3>Asistencia acumulada</h3>
+    <div class="card"><canvas id="chartAsistenciaGrupo" height="220"></canvas></div>
+    <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
+    <div class="card"><canvas id="chartEntregas" height="220"></canvas></div>
+    <h3>Distribución de calificaciones — ${esc(ctx.trimestre)}</h3>
+    <div class="card"><canvas id="chartDistribucion" height="220"></canvas></div>
+  `;
+}
+
+const chartInstances = {};
+function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
+const CHART_COLORS = { Presente: '#4C7A5E', Ausente: '#B5533C', Retardo: '#C48A34', Justificado: '#5B7EA6', accent: '#2F4A3D', line: '#DAD0BC' };
+
+function postRenderHooks() {
+  if (currentView === 'dashboard' && ctx.grupoId) renderDashboardCharts();
+  if (currentView === 'admin' && typeof adminTab !== 'undefined' && adminTab === 'perfil' && typeof perfilAlumnoId !== 'undefined' && perfilAlumnoId) {
+    if (typeof renderPerfilChart === 'function') renderPerfilChart();
+  }
+}
+function renderDashboardCharts() {
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  if (!grupo) return;
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
+
+  // 1. Asistencia acumulada
+  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
+  Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => { if (r.grupoId === ctx.grupoId && counts[r.estatus] !== undefined) counts[r.estatus]++; });
+  const elA = document.getElementById('chartAsistenciaGrupo');
+  if (elA) {
+    destroyChart('chartAsistenciaGrupo');
+    chartInstances.chartAsistenciaGrupo = new Chart(elA, {
+      type: 'doughnut',
+      data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: Object.keys(counts).map(k => CHART_COLORS[k]) }] },
+      options: { plugins: { legend: { position: 'bottom' } } }
+    });
+  }
+
+  // 2. % de entregas por rubro
+  const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
+  const elE = document.getElementById('chartEntregas');
+  if (elE) {
+    destroyChart('chartEntregas');
+    const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+    const pcts = rubros.map(r => {
+      if (alumnos.length === 0) return 0;
+      const entregaron = new Set(calRows.filter(c => c.rubro === r.rubro).map(c => c.alumnoId)).size;
+      return Math.round((entregaron / alumnos.length) * 100);
+    });
+    chartInstances.chartEntregas = new Chart(elE, {
+      type: 'bar',
+      data: { labels: rubros.map(r => r.rubro), datasets: [{ label: '% entregó', data: pcts, backgroundColor: CHART_COLORS.accent }] },
+      options: { scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } } }
+    });
+  }
+
+  // 3. Distribución de calificaciones (aprobado/reprobado/sin calificar)
+  const elD = document.getElementById('chartDistribucion');
+  if (elD) {
+    destroyChart('chartDistribucion');
+    let aprobado = 0, reprobado = 0, sinCalificar = 0;
+    alumnos.forEach(a => {
+      const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.alumnoId === a.id && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+      if (calRows.length === 0) { sinCalificar++; return; }
+      let final = 0;
+      rubros.forEach(r => {
+        const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
+        if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
+      });
+      if (final >= 6) aprobado++; else reprobado++;
+    });
+    chartInstances.chartDistribucion = new Chart(elD, {
+      type: 'doughnut',
+      data: { labels: ['Aprobado (≥6)', 'Reprobado (<6)', 'Sin calificar'], datasets: [{ data: [aprobado, reprobado, sinCalificar], backgroundColor: [CHART_COLORS.Presente, CHART_COLORS.Ausente, CHART_COLORS.line] }] },
+      options: { plugins: { legend: { position: 'bottom' } } }
+    });
+  }
 }
 
 /* ================================================================
