@@ -250,6 +250,7 @@ function renderPerfilDetalle(a) {
       <div><div class="muted">Justif.</div><h2 style="color:var(--just);">${counts.Justificado}</h2></div>
       <div><div class="muted">%</div><h2>${totalAsist ? pct + '%' : '—'}</h2></div>
     </div>
+    ${totalAsist ? `<div class="card"><canvas id="chartPerfilAsistencia" height="180"></canvas></div>` : ''}
 
     <h3>Calificaciones</h3>
     ${califHtml}
@@ -269,8 +270,21 @@ function renderPerfilDetalle(a) {
   `;
 }
 
-/* ---------------- ENCUADRES ---------------- */
-function adminEncuadres() {
+function renderPerfilChart() {
+  const el = document.getElementById('chartPerfilAsistencia');
+  if (!el || !perfilAlumnoId) return;
+  const asistAll = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.alumnoId === perfilAlumnoId);
+  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
+  asistAll.forEach(r => { if (counts[r.estatus] !== undefined) counts[r.estatus]++; });
+  destroyChart('chartPerfilAsistencia');
+  chartInstances.chartPerfilAsistencia = new Chart(el, {
+    type: 'doughnut',
+    data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: Object.keys(counts).map(k => CHART_COLORS[k]) }] },
+    options: { plugins: { legend: { position: 'bottom' } } }
+  });
+}
+
+/* ---------------- ENCUADRES ---------------- */function adminEncuadres() {
   const combos = {};
   Store.data.Encuadres.forEach(e => {
     const key = e.asignatura + '||' + e.trimestre;
