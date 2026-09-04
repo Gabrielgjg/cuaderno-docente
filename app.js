@@ -107,24 +107,31 @@ async function refreshFromServer() {
   } catch (e) { /* seguimos con lo local */ }
 }
 
-async function syncPending() {
-  if (syncing) return;
-  if (Store.pendingCount() === 0) { updateSyncDot(); return; }
-  if (!navigator.onLine) { updateSyncDot(); return; }
+async function syncPending(manual) {
+  if (syncing) { if (manual) toast('Ya está sincronizando…'); return; }
+  if (Store.pendingCount() === 0) { updateSyncDot(); if (manual) toast('No hay nada pendiente'); return; }
+  if (!navigator.onLine) { updateSyncDot(); if (manual) toast('Sin conexión detectada'); return; }
   syncing = true;
   updateSyncDot();
+  const CHUNK_SIZE = 15; // evita URLs demasiado largas en el JSONP
   try {
-    const batch = {
-      asistencia: Store.queue.Asistencia,
-      calificaciones: Store.queue.Calificaciones,
-      incidencias: Store.queue.Incidencias,
-      diario: Store.queue.Diario
-    };
-    const hasBatch = batch.asistencia.length || batch.calificaciones.length || batch.incidencias.length || batch.diario.length;
-    if (hasBatch) {
-      await jsonp('sync', { data: JSON.stringify(batch) });
-      Store.queue.Asistencia = []; Store.queue.Calificaciones = [];
-      Store.queue.Incidencias = []; Store.queue.Diario = [];
+    const categorias = [
+      { key: 'Asistencia', campo: 'asistencia' },
+      { key: 'Calificaciones', campo: 'calificaciones' },
+      { key: 'Incidencias', campo: 'incidencias' },
+      { key: 'Diario', campo: 'diario' }
+    ];
+    for (const cat of categorias) {
+      const items = Store.queue[cat.key].slice();
+      for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+        const chunk = items.slice(i, i + CHUNK_SIZE);
+        const payload = { asistencia: [], calificaciones: [], incidencias: [], diario: [] };
+        payload[cat.campo] = chunk;
+        await jsonp('sync', { data: JSON.stringify(payload) });
+        const sentIds = new Set(chunk.map(r => r.id));
+        Store.queue[cat.key] = Store.queue[cat.key].filter(r => !sentIds.has(r.id));
+        Store.persist();
+      }
     }
     for (const g of Store.queue.Grupos) await jsonp('saveGrupo', { data: JSON.stringify(g) });
     Store.queue.Grupos = [];
@@ -135,6 +142,7 @@ async function syncPending() {
     await refreshFromServer();
   } catch (e) {
     console.warn('Sync falló, se reintentará', e);
+    if (manual) toast('Error al sincronizar: ' + e.message);
   } finally {
     syncing = false;
     updateSyncDot();
@@ -271,7 +279,8 @@ function viewDashboard() {
         <button class="btn small secondary" onclick="ctx.grupoId='${g.id}'; goTo('asistencia')">Pase de lista</button>
       </div>`).join('')}
     <div class="divider"></div>
-    <button class="btn block secondary" onclick="refreshFromServer()">Actualizar datos del servidor</button>
+    <button class="btn block secondary" onclick="syncPending(true)">Sincronizar ahora</button>
+    <button class="btn block ghost" style="margin-top:8px;" onclick="refreshFromServer()">Actualizar datos del servidor</button>
   `;
 }
 function viewDashboardGrupo() {
