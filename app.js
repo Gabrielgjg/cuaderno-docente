@@ -279,13 +279,17 @@ function viewDashboardGrupo() {
   if (!grupo) return '';
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
   return `
-    <div class="card-flat muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</div>
+    <div class="row between no-print" style="margin-bottom:4px;">
+      <span class="muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</span>
+      <button class="btn small secondary" onclick="window.print()">Imprimir / PDF</button>
+    </div>
+    <div class="card-flat muted" style="display:none;" id="printHeader">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos · ${esc(ctx.trimestre)}</div>
     <h3>Asistencia acumulada</h3>
-    <div class="card"><canvas id="chartAsistenciaGrupo" height="220"></canvas></div>
+    <div class="card chart-box"><canvas id="chartAsistenciaGrupo"></canvas></div>
     <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
-    <div class="card"><canvas id="chartEntregas" height="220"></canvas></div>
+    <div class="card chart-box"><canvas id="chartEntregas"></canvas></div>
     <h3>Distribución de calificaciones — ${esc(ctx.trimestre)}</h3>
-    <div class="card"><canvas id="chartDistribucion" height="220"></canvas></div>
+    <div class="card chart-box"><canvas id="chartDistribucion"></canvas></div>
   `;
 }
 
@@ -320,7 +324,7 @@ function renderDashboardCharts() {
     chartInstances.chartAsistenciaGrupo = new Chart(elA, {
       type: 'doughnut',
       data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: Object.keys(counts).map(k => CHART_COLORS[k]) }] },
-      options: { plugins: { legend: { position: 'bottom' } } }
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
     });
   }
 
@@ -338,7 +342,7 @@ function renderDashboardCharts() {
     chartInstances.chartEntregas = new Chart(elE, {
       type: 'bar',
       data: { labels: rubros.map(r => r.rubro), datasets: [{ label: '% entregó', data: pcts, backgroundColor: CHART_COLORS.accent }] },
-      options: { scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } } }
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } } }
     });
   }
 
@@ -360,7 +364,7 @@ function renderDashboardCharts() {
     chartInstances.chartDistribucion = new Chart(elD, {
       type: 'doughnut',
       data: { labels: ['Aprobado (≥6)', 'Reprobado (<6)', 'Sin calificar'], datasets: [{ data: [aprobado, reprobado, sinCalificar], backgroundColor: [CHART_COLORS.Presente, CHART_COLORS.Ausente, CHART_COLORS.line] }] },
-      options: { plugins: { legend: { position: 'bottom' } } }
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
     });
   }
 }
