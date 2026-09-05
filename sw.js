@@ -1,8 +1,19 @@
-const CACHE = 'cuaderno-docente-v9';
+const CACHE = 'cuaderno-docente-v10';
 const SHELL = ['./', './index.html', './app.js', './admin.js', './classroom.js', './chart.umd.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  e.waitUntil(
+    caches.open(CACHE).then(async (c) => {
+      // Se fuerza {cache:'reload'} para ignorar la caché HTTP del navegador
+      // y traer siempre bytes frescos del servidor al actualizar versión.
+      await Promise.all(SHELL.map(async (url) => {
+        try {
+          const res = await fetch(url, { cache: 'reload' });
+          if (res.ok) await c.put(url, res);
+        } catch (err) { /* si un archivo falla no se detiene toda la instalación */ }
+      }));
+    })
+  );
   self.skipWaiting();
 });
 
