@@ -127,17 +127,27 @@ async function syncPending(manual) {
         const chunk = items.slice(i, i + CHUNK_SIZE);
         const payload = { asistencia: [], calificaciones: [], incidencias: [], diario: [] };
         payload[cat.campo] = chunk;
-        await jsonp('sync', { data: JSON.stringify(payload) });
+        const res = await jsonp('sync', { data: JSON.stringify(payload) });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó ' + cat.key);
         const sentIds = new Set(chunk.map(r => r.id));
         Store.queue[cat.key] = Store.queue[cat.key].filter(r => !sentIds.has(r.id));
         Store.persist();
       }
     }
-    for (const g of Store.queue.Grupos) await jsonp('saveGrupo', { data: JSON.stringify(g) });
+    for (const g of Store.queue.Grupos) {
+      const res = await jsonp('saveGrupo', { data: JSON.stringify(g) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el grupo');
+    }
     Store.queue.Grupos = [];
-    for (const a of Store.queue.Alumnos) await jsonp('saveAlumno', { data: JSON.stringify(a) });
+    for (const a of Store.queue.Alumnos) {
+      const res = await jsonp('saveAlumno', { data: JSON.stringify(a) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el alumno');
+    }
     Store.queue.Alumnos = [];
-    for (const act of Store.queue.Actividades) await jsonp('saveActividad', { data: JSON.stringify(act) });
+    for (const act of Store.queue.Actividades) {
+      const res = await jsonp('saveActividad', { data: JSON.stringify(act) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la actividad');
+    }
     Store.queue.Actividades = [];
     Store.persist();
     toast('Sincronizado ✓');
@@ -180,7 +190,8 @@ document.getElementById('modalOverlay').addEventListener('click', (e) => {
   if (e.target.id === 'modalOverlay') closeModal();
 });
 function uid() { return 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+function dateToISO(d) { const tz = d.getTimezoneOffset(); return new Date(d.getTime() - tz * 60000).toISOString().slice(0, 10); }
+function todayISO() { return dateToISO(new Date()); }
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 // Para insertar texto libre del usuario como literal JS ('...') dentro de un atributo onclick="..."
 function attrJs(s) {
@@ -390,12 +401,12 @@ function lunesDe(fechaISO) {
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
   d.setDate(diff);
-  return d.toISOString().slice(0, 10);
+  return dateToISO(d);
 }
 function sumarDias(fechaISO, n) {
   const d = new Date(fechaISO + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return dateToISO(d);
 }
 function viewAsistencia() {
   if (!ctx.grupoId) return `<div class="empty"><p class="muted">Selecciona un grupo arriba para tomar asistencia.</p></div>`;
