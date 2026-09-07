@@ -22,8 +22,8 @@ const TRIMESTRES = ['Trimestre 1', 'Trimestre 2', 'Trimestre 3'];
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [] },
 
   load() {
     try {
@@ -137,6 +137,8 @@ async function syncPending(manual) {
     Store.queue.Grupos = [];
     for (const a of Store.queue.Alumnos) await jsonp('saveAlumno', { data: JSON.stringify(a) });
     Store.queue.Alumnos = [];
+    for (const act of Store.queue.Actividades) await jsonp('saveActividad', { data: JSON.stringify(act) });
+    Store.queue.Actividades = [];
     Store.persist();
     toast('Sincronizado ✓');
     await refreshFromServer();
@@ -381,8 +383,29 @@ function renderDashboardCharts() {
 /* ================================================================
    ASISTENCIA
    ================================================================ */
+let asistVista = 'lista';
+let asistSemanaInicio = null;
+function lunesDe(fechaISO) {
+  const d = new Date(fechaISO + 'T00:00:00');
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  return d.toISOString().slice(0, 10);
+}
+function sumarDias(fechaISO, n) {
+  const d = new Date(fechaISO + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
 function viewAsistencia() {
   if (!ctx.grupoId) return `<div class="empty"><p class="muted">Selecciona un grupo arriba para tomar asistencia.</p></div>`;
+  const toggle = `<div class="chip-list">
+      <span class="chip ${asistVista === 'lista' ? 'active' : ''}" onclick="asistVista='lista'; renderCurrentView();">Pase de lista</span>
+      <span class="chip ${asistVista === 'grid' ? 'active' : ''}" onclick="asistVista='grid'; renderCurrentView();">Cuadrícula semanal</span>
+    </div>`;
+  return toggle + (asistVista === 'grid' ? viewAsistenciaGrid() : viewAsistenciaLista());
+}
+function viewAsistenciaLista() {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (alumnos.length === 0) return `<div class="empty"><p class="muted">Este grupo no tiene alumnos activos. Agrégalos en Admin.</p></div>`;
 
@@ -404,6 +427,67 @@ function viewAsistencia() {
     </div>
     <button class="btn block" style="margin-top:14px;" onclick="guardarAsistencia()">${Object.keys(existentes).length ? 'Guardar cambios' : 'Guardar pase de lista'}</button>
   `;
+}
+function viewAsistenciaGrid() {
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  if (alumnos.length === 0) return `<div class="empty"><p class="muted">Este grupo no tiene alumnos activos.</p></div>`;
+  if (!asistSemanaInicio) asistSemanaInicio = lunesDe(todayISO());
+  const dias = [0, 1, 2, 3, 4].map(i => sumarDias(asistSemanaInicio, i));
+  const nombresDia = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie'];
+  const registros = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.grupoId === ctx.grupoId);
+
+  return `
+    <div class="row between" style="margin:10px 0;">
+      <button class="btn small ghost" onclick="asistSemanaInicio=sumarDias(asistSemanaInicio,-7); renderCurrentView();">← Anterior</button>
+      <span class="muted">${dias[0]} al ${dias[4]}</span>
+      <button class="btn small ghost" onclick="asistSemanaInicio=sumarDias(asistSemanaInicio,7); renderCurrentView();">Siguiente →</button>
+    </div>
+    <p class="muted" style="text-align:center; font-size:.8rem;">Toca una celda para cambiar el estatus (vacío → P → A → R → J → vacío)</p>
+    <div style="overflow-x:auto; margin-top:8px;">
+    <table style="min-width:480px;">
+      <thead><tr>
+        <th style="position:sticky; left:0; background:var(--paper); min-width:140px;">Alumno</th>
+        ${dias.map((f, i) => `<th style="min-width:54px; text-align:center;">${nombresDia[i]}<br><span style="font-weight:400; font-size:.68rem;">${f.slice(5)}</span></th>`).join('')}
+      </tr></thead>
+      <tbody>
+        ${alumnos.map(a => `<tr>
+          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}</td>
+          ${dias.map(f => {
+            const reg = registros.find(r => r.alumnoId === a.id && r.fecha === f);
+            const est = reg ? reg.estatus : '';
+            return `<td style="text-align:center;"><button class="stat ${est ? 'on' : ''}" data-s="${est}" onclick="ciclarAsistenciaCelda('${a.id}','${f}',this)">${est ? est[0] : '·'}</button></td>`;
+          }).join('')}
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>
+    <button class="btn small ghost" style="margin-top:10px;" onclick="asistSemanaInicio=lunesDe(todayISO()); renderCurrentView();">Ir a esta semana</button>
+  `;
+}
+function ciclarAsistenciaCelda(alumnoId, fecha, el) {
+  const ORDEN = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
+  const registro = Store.data.Asistencia.concat(Store.queue.Asistencia).find(r => r.alumnoId === alumnoId && r.grupoId === ctx.grupoId && r.fecha === fecha);
+  const curIdx = registro ? ORDEN.indexOf(registro.estatus) : -1;
+  const nextIdx = curIdx + 1;
+  if (nextIdx >= ORDEN.length) {
+    if (registro) {
+      Store.data.Asistencia = Store.data.Asistencia.filter(r => r.id !== registro.id);
+      Store.queue.Asistencia = Store.queue.Asistencia.filter(r => r.id !== registro.id);
+      Store.persist();
+      jsonp('deleteAsistencia', { id: registro.id }).catch(() => {});
+    }
+    el.textContent = '·'; el.classList.remove('on'); el.dataset.s = '';
+    return;
+  }
+  const nuevoEstatus = ORDEN[nextIdx];
+  const row = { id: registro ? registro.id : uid(), alumnoId, grupoId: ctx.grupoId, fecha, estatus: nuevoEstatus, observacion: registro ? registro.observacion : '' };
+  Store.upsertLocal('Asistencia', row);
+  Store.enqueue('Asistencia', row);
+  Store.persist();
+  syncPending();
+  el.textContent = nuevoEstatus[0];
+  el.classList.add('on');
+  el.dataset.s = nuevoEstatus;
 }
 function contarAsistencia(alumnoId) {
   const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
@@ -476,6 +560,13 @@ function guardarAsistencia() {
 /* ================================================================
    CALIFICACIONES
    ================================================================ */
+let califVista = 'grid';
+function abrevRubro(rubro) { return (rubro || '').trim().slice(0, 2).toUpperCase(); }
+function actividadesDe(grupo) {
+  return Store.data.Actividades.concat(Store.queue.Actividades)
+    .filter(x => x.asignatura === grupo.asignatura && x.trimestre === ctx.trimestre && x.activo !== false)
+    .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
+}
 function viewCalificaciones() {
   if (!ctx.grupoId) return `<div class="empty"><p class="muted">Selecciona un grupo arriba.</p></div>`;
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
@@ -485,14 +576,120 @@ function viewCalificaciones() {
     return `<div class="empty"><p class="muted">No hay encuadre configurado para <strong>${esc(grupo.asignatura)}</strong> en ${esc(ctx.trimestre)}.</p>
       <button class="btn" onclick="goTo('admin')">Configurar encuadre</button></div>`;
   }
-  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones)
-    .filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-
   return `
     <div class="card-flat muted">Encuadre de <strong>${esc(grupo.asignatura)}</strong>: ${rubros.map(r => `${esc(r.rubro)} (${r.porcentaje}%)`).join(' · ')}</div>
-    ${alumnos.map(a => alumnoCalifCard(a, rubros, calRows.filter(c => c.alumnoId === a.id))).join('')}
+    <div class="chip-list">
+      <span class="chip ${califVista === 'grid' ? 'active' : ''}" onclick="califVista='grid'; renderCurrentView();">Cuadrícula</span>
+      <span class="chip ${califVista === 'alumno' ? 'active' : ''}" onclick="califVista='alumno'; renderCurrentView();">Por alumno</span>
+    </div>
+    ${califVista === 'grid' ? califVistaGrid(grupo, rubros) : califVistaAlumno(grupo, rubros)}
   `;
+}
+function califVistaAlumno(grupo, rubros) {
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  return alumnos.map(a => alumnoCalifCard(a, rubros, calRows.filter(c => c.alumnoId === a.id))).join('');
+}
+function califVistaGrid(grupo, rubros) {
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const actividades = actividadesDe(grupo);
+  const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+
+  const formNueva = `
+    <div class="card">
+      <h3>Nueva actividad</h3>
+      <div class="row">
+        <select id="actRubro" style="flex:1; padding:9px; border:1px solid var(--line); border-radius:8px;">
+          ${rubros.map(r => `<option value="${esc(r.rubro)}">${esc(r.rubro)} (${abrevRubro(r.rubro)})</option>`).join('')}
+        </select>
+        <input id="actNombre" placeholder="Nombre (ej. Examen unidad 2)" style="flex:2; padding:9px; border:1px solid var(--line); border-radius:8px;">
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <input id="actFecha" type="date" value="${todayISO()}" style="flex:1; padding:9px; border:1px solid var(--line); border-radius:8px;">
+        <button class="btn small" onclick="crearActividad()">+ Agregar</button>
+      </div>
+    </div>`;
+
+  if (actividades.length === 0) {
+    return formNueva + '<p class="muted" style="text-align:center;">Agrega tu primera actividad para empezar a capturar en cuadrícula.</p>';
+  }
+
+  const finalPorAlumno = {};
+  alumnos.forEach(a => {
+    let final = 0;
+    rubros.forEach(r => {
+      const vals = calRows.filter(c => c.alumnoId === a.id && c.rubro === r.rubro).map(c => Number(c.valor));
+      if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
+    });
+    finalPorAlumno[a.id] = final;
+  });
+
+  return formNueva + `
+    <div style="overflow-x:auto; margin-top:10px;">
+    <table style="min-width:${360 + actividades.length * 84}px;">
+      <thead><tr>
+        <th style="position:sticky; left:0; background:var(--paper); min-width:140px;">Alumno</th>
+        ${actividades.map(act => `<th style="min-width:78px;" title="${esc(act.rubro)} · ${esc(act.fecha)}">${abrevRubro(act.rubro)}<br><span style="font-weight:400; font-size:.68rem;">${esc((act.nombre || '').slice(0, 14))}</span></th>`).join('')}
+        <th style="min-width:56px;">Prom.</th>
+      </tr></thead>
+      <tbody>
+        ${alumnos.map(a => `<tr>
+          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}</td>
+          ${actividades.map(act => {
+            const rows = calRows.filter(c => c.alumnoId === a.id && c.actividadId === act.id);
+            const ultimo = rows[rows.length - 1];
+            return `<td style="text-align:center;"><input type="number" min="0" max="10" step="0.1" value="${ultimo ? ultimo.valor : ''}"
+              data-alumno="${a.id}" data-actividad="${act.id}" data-reg="${ultimo ? ultimo.id : ''}" data-rubro="${esc(act.rubro)}"
+              style="width:52px; padding:6px; border:1px solid var(--line); border-radius:6px; text-align:center;"
+              onchange="guardarCeldaCalificacion(this)"></td>`;
+          }).join('')}
+          <td style="text-align:center;"><strong>${finalPorAlumno[a.id].toFixed(1)}</strong></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>
+  `;
+}
+function crearActividad() {
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  const rubro = document.getElementById('actRubro').value;
+  const nombre = document.getElementById('actNombre').value.trim();
+  const fecha = document.getElementById('actFecha').value || todayISO();
+  if (!nombre) { toast('Ponle un nombre a la actividad'); return; }
+  const row = { id: uid(), grupoId: ctx.grupoId, asignatura: grupo.asignatura, trimestre: ctx.trimestre, rubro, nombre, fecha, activo: true };
+  Store.upsertLocal('Actividades', row);
+  Store.enqueue('Actividades', row);
+  Store.persist();
+  toast('Actividad agregada');
+  syncPending();
+  renderCurrentView();
+}
+function guardarCeldaCalificacion(input) {
+  const alumnoId = input.dataset.alumno, actividadId = input.dataset.actividad, rubro = input.dataset.rubro, regId = input.dataset.reg;
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  const act = Store.data.Actividades.concat(Store.queue.Actividades).find(x => x.id === actividadId);
+
+  if (input.value === '') {
+    if (regId) {
+      Store.data.Calificaciones = Store.data.Calificaciones.filter(c => c.id !== regId);
+      Store.queue.Calificaciones = Store.queue.Calificaciones.filter(c => c.id !== regId);
+      Store.persist();
+      jsonp('deleteCalificacion', { id: regId }).catch(() => {});
+      renderCurrentView();
+    }
+    return;
+  }
+  const valor = parseFloat(input.value);
+  if (isNaN(valor) || valor < 0 || valor > 10) { toast('Calificación inválida (0–10)'); renderCurrentView(); return; }
+  const row = {
+    id: regId || uid(), alumnoId, grupoId: ctx.grupoId, asignatura: grupo.asignatura, trimestre: ctx.trimestre,
+    rubro, valor, evidencia: act ? act.nombre : '', fecha: act ? act.fecha : todayISO(), actividadId
+  };
+  Store.upsertLocal('Calificaciones', row);
+  Store.enqueue('Calificaciones', row);
+  Store.persist();
+  syncPending();
+  renderCurrentView();
 }
 function alumnoCalifCard(alumno, rubros, calRows) {
   const porRubro = {};
