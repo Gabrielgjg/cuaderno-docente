@@ -28,9 +28,9 @@ const Store = {
   load() {
     try {
       const d = localStorage.getItem('cd_data');
-      if (d) this.data = JSON.parse(d);
+      if (d) this.data = Object.assign({}, this.data, JSON.parse(d));
       const q = localStorage.getItem('cd_queue');
-      if (q) this.queue = JSON.parse(q);
+      if (q) this.queue = Object.assign({}, this.queue, JSON.parse(q));
     } catch (e) { console.warn('No se pudo leer cache local', e); }
   },
   persist() {
