@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v14'
+  APP_VERSION: 'v15'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -281,10 +281,21 @@ function viewDashboard() {
       <button class="btn" onclick="goTo('admin')">Configurar grupos</button>
     </div>`;
   }
+  const riesgoTotal = [];
+  grupos.forEach(g => alumnosEnRiesgo(g.id).forEach(x => riesgoTotal.push({ ...x, grupo: g })));
+  riesgoTotal.sort((a, b) => b.racha - a.racha);
   return `
     <div class="card"><div class="row between"><div><div class="muted">Grupos activos</div><h2>${grupos.length}</h2></div>
       <div><div class="muted">Alumnos</div><h2>${totalAlumnos}</h2></div>
       <div><div class="muted">Por sincronizar</div><h2 style="color:${pend ? 'var(--warn)' : 'var(--ok)'}">${pend}</h2></div></div></div>
+    ${riesgoTotal.length ? `
+      <div class="card" style="border-color:var(--danger);">
+        <h3 style="color:var(--danger);">⚠ ${riesgoTotal.length} alumno(s) con 3+ faltas seguidas</h3>
+        ${riesgoTotal.map(x => `<div class="row between" style="margin-top:6px;">
+          <span>${esc(x.alumno.nombre)} <span class="muted">· ${esc(x.grupo.grado)}${esc(x.grupo.grupo)}</span></span>
+          <span class="tag" style="background:var(--danger); color:#fff;">${x.racha} faltas</span>
+        </div>`).join('')}
+      </div>` : ''}
     <p class="muted" style="text-align:center; margin:6px 0 12px;">Selecciona un grupo arriba para ver sus estadísticas</p>
     <h3>Grupos</h3>
     ${grupos.map(g => `
@@ -301,12 +312,21 @@ function viewDashboardGrupo() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
+  const riesgo = alumnosEnRiesgo(ctx.grupoId);
   return `
     <div class="row between no-print" style="margin-bottom:4px;">
       <span class="muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</span>
       <button class="btn small secondary" onclick="window.print()">Imprimir / PDF</button>
     </div>
     <div class="card-flat muted" style="display:none;" id="printHeader">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos · ${esc(ctx.trimestre)}</div>
+    ${riesgo.length ? `
+      <div class="card" style="border-color:var(--danger);">
+        <h3 style="color:var(--danger);">⚠ ${riesgo.length} alumno(s) con 3+ faltas seguidas</h3>
+        ${riesgo.map(x => `<div class="row between" style="margin-top:6px;">
+          <span>${esc(x.alumno.nombre)}</span>
+          <span class="tag" style="background:var(--danger); color:#fff;">${x.racha} faltas</span>
+        </div>`).join('')}
+      </div>` : ''}
     <h3>Asistencia acumulada</h3>
     <div class="card chart-box"><canvas id="chartAsistenciaGrupo"></canvas></div>
     <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
@@ -463,7 +483,7 @@ function viewAsistenciaGrid() {
       </tr></thead>
       <tbody>
         ${alumnos.map(a => `<tr>
-          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}</td>
+          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}${rachaFaltasConsecutivas(a.id, ctx.grupoId) >= 3 ? ` <span title="3+ faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}</td>
           ${dias.map(f => {
             const reg = registros.find(r => r.alumnoId === a.id && r.fecha === f);
             const est = reg ? reg.estatus : '';
@@ -508,11 +528,28 @@ function contarAsistencia(alumnoId) {
   });
   return counts;
 }
+function rachaFaltasConsecutivas(alumnoId, grupoId) {
+  const regs = Store.data.Asistencia.concat(Store.queue.Asistencia)
+    .filter(r => r.alumnoId === alumnoId && r.grupoId === grupoId)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+  let racha = 0;
+  for (let i = regs.length - 1; i >= 0; i--) {
+    if (regs[i].estatus === 'Ausente') racha++; else break;
+  }
+  return racha;
+}
+function alumnosEnRiesgo(grupoId) {
+  return Store.alumnosDeGrupo(grupoId)
+    .map(a => ({ alumno: a, racha: rachaFaltasConsecutivas(a.id, grupoId) }))
+    .filter(x => x.racha >= 3)
+    .sort((a, b) => b.racha - a.racha);
+}
 function rosterRow(a, registro) {
   const c = contarAsistencia(a.id);
   const estatusActual = registro ? registro.estatus : null;
+  const racha = rachaFaltasConsecutivas(a.id, ctx.grupoId);
   return `<div class="roster-item" data-alumno="${a.id}" data-registro="${registro ? registro.id : ''}">
-    <div class="roster-name">${esc(a.nombre)}<br>
+    <div class="roster-name">${esc(a.nombre)}${racha >= 3 ? ` <span title="${racha} faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}<br>
       <span class="muted" style="font-size:.72rem; font-weight:400;">P:${c.Presente} · A:${c.Ausente} · R:${c.Retardo} · J:${c.Justificado}</span>
     </div>
     <div class="status-btns">
