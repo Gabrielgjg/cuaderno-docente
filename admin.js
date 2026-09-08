@@ -210,10 +210,9 @@ function adminPerfil() {
 }
 function renderPerfilDetalle(a) {
   const grupo = Store.data.Grupos.find(g => g.id === a.grupoId);
-  const asistAll = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.alumnoId === a.id);
-  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
-  asistAll.forEach(r => { if (counts[r.estatus] !== undefined) counts[r.estatus]++; });
-  const totalAsist = asistAll.length;
+  ensureResumenAsistencia(a.grupoId);
+  const counts = contarAsistencia(a.id, a.grupoId);
+  const totalAsist = counts.Presente + counts.Ausente + counts.Retardo + counts.Justificado;
   const pct = totalAsist ? Math.round((counts.Presente / totalAsist) * 100) : 0;
 
   const incidencias = Store.data.Incidencias.concat(Store.queue.Incidencias).filter(r => r.alumnoId === a.id)
@@ -274,9 +273,8 @@ function renderPerfilDetalle(a) {
 function renderPerfilChart() {
   const el = document.getElementById('chartPerfilAsistencia');
   if (!el || !perfilAlumnoId) return;
-  const asistAll = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.alumnoId === perfilAlumnoId);
-  const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
-  asistAll.forEach(r => { if (counts[r.estatus] !== undefined) counts[r.estatus]++; });
+  const alumno = Store.data.Alumnos.find(a => a.id === perfilAlumnoId);
+  const counts = contarAsistencia(perfilAlumnoId, alumno ? alumno.grupoId : null);
   destroyChart('chartPerfilAsistencia');
   chartInstances.chartPerfilAsistencia = new Chart(el, {
     type: 'doughnut',
