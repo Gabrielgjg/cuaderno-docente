@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v15'
+  APP_VERSION: 'v16'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -282,7 +282,7 @@ function viewDashboard() {
     </div>`;
   }
   const riesgoTotal = [];
-  grupos.forEach(g => alumnosEnRiesgo(g.id).forEach(x => riesgoTotal.push({ ...x, grupo: g })));
+  grupos.forEach(g => { ensureResumenAsistencia(g.id); alumnosEnRiesgo(g.id).forEach(x => riesgoTotal.push({ ...x, grupo: g })); });
   riesgoTotal.sort((a, b) => b.racha - a.racha);
   return `
     <div class="card"><div class="row between"><div><div class="muted">Grupos activos</div><h2>${grupos.length}</h2></div>
@@ -311,6 +311,7 @@ function viewDashboard() {
 function viewDashboardGrupo() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
+  ensureResumenAsistencia(ctx.grupoId);
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
   const riesgo = alumnosEnRiesgo(ctx.grupoId);
   return `
@@ -360,7 +361,10 @@ function renderDashboardCharts() {
 
   // 1. Asistencia acumulada
   const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
-  Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => { if (r.grupoId === ctx.grupoId && counts[r.estatus] !== undefined) counts[r.estatus]++; });
+  alumnos.forEach(a => {
+    const c = contarAsistencia(a.id, ctx.grupoId);
+    counts.Presente += c.Presente; counts.Ausente += c.Ausente; counts.Retardo += c.Retardo; counts.Justificado += c.Justificado;
+  });
   const elA = document.getElementById('chartAsistenciaGrupo');
   if (elA) {
     destroyChart('chartAsistenciaGrupo');
@@ -438,6 +442,7 @@ function viewAsistencia() {
   return toggle + (asistVista === 'grid' ? viewAsistenciaGrid() : viewAsistenciaLista());
 }
 function viewAsistenciaLista() {
+  ensureResumenAsistencia(ctx.grupoId);
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (alumnos.length === 0) return `<div class="empty"><p class="muted">Este grupo no tiene alumnos activos. Agrégalos en Admin.</p></div>`;
 
@@ -461,6 +466,7 @@ function viewAsistenciaLista() {
   `;
 }
 function viewAsistenciaGrid() {
+  ensureResumenAsistencia(ctx.grupoId);
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (alumnos.length === 0) return `<div class="empty"><p class="muted">Este grupo no tiene alumnos activos.</p></div>`;
   if (!asistSemanaInicio) asistSemanaInicio = lunesDe(todayISO());
@@ -521,14 +527,33 @@ function ciclarAsistenciaCelda(alumnoId, fecha, el) {
   el.classList.add('on');
   el.dataset.s = nuevoEstatus;
 }
-function contarAsistencia(alumnoId) {
+function contarAsistencia(alumnoId, grupoId) {
+  const cache = grupoId && resumenAsistenciaCache[grupoId];
+  if (cache && cache[alumnoId]) {
+    const r = cache[alumnoId];
+    return { Presente: r.Presente, Ausente: r.Ausente, Retardo: r.Retardo, Justificado: r.Justificado };
+  }
+  // Respaldo mientras llega el resumen del servidor: solo ve la ventana reciente local.
   const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
   Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => {
     if (r.alumnoId === alumnoId && counts[r.estatus] !== undefined) counts[r.estatus]++;
   });
   return counts;
 }
+let resumenAsistenciaCache = {};
+let resumenAsistenciaCargando = {};
+function ensureResumenAsistencia(grupoId) {
+  if (!grupoId || resumenAsistenciaCache[grupoId] || resumenAsistenciaCargando[grupoId]) return;
+  resumenAsistenciaCargando[grupoId] = true;
+  jsonp('getResumenAsistencia', { grupoId })
+    .then(res => { if (res && res.ok) resumenAsistenciaCache[grupoId] = res.data; })
+    .catch(() => {})
+    .finally(() => { resumenAsistenciaCargando[grupoId] = false; renderCurrentView(); });
+}
 function rachaFaltasConsecutivas(alumnoId, grupoId) {
+  const cache = resumenAsistenciaCache[grupoId];
+  if (cache && cache[alumnoId] && typeof cache[alumnoId].racha === 'number') return cache[alumnoId].racha;
+  // Respaldo local (ventana reciente) mientras llega el resumen del servidor.
   const regs = Store.data.Asistencia.concat(Store.queue.Asistencia)
     .filter(r => r.alumnoId === alumnoId && r.grupoId === grupoId)
     .sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -545,7 +570,7 @@ function alumnosEnRiesgo(grupoId) {
     .sort((a, b) => b.racha - a.racha);
 }
 function rosterRow(a, registro) {
-  const c = contarAsistencia(a.id);
+  const c = contarAsistencia(a.id, ctx.grupoId);
   const estatusActual = registro ? registro.estatus : null;
   const racha = rachaFaltasConsecutivas(a.id, ctx.grupoId);
   return `<div class="roster-item" data-alumno="${a.id}" data-registro="${registro ? registro.id : ''}">
@@ -560,7 +585,7 @@ function rosterRow(a, registro) {
 function verResumenAsistencia() {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const rows = alumnos.map(a => {
-    const c = contarAsistencia(a.id);
+    const c = contarAsistencia(a.id, ctx.grupoId);
     const total = c.Presente + c.Ausente + c.Retardo + c.Justificado;
     const pct = total ? Math.round((c.Presente / total) * 100) : 0;
     return { nombre: a.nombre, ...c, total, pct };
