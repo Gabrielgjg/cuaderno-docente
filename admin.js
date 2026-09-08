@@ -461,6 +461,7 @@ function confirmarImportacion(grupoId) {
 function adminConfig() {
   const url = localStorage.getItem('cd_api_url') || CONFIG.API_URL;
   return `
+    <div class="card-flat muted" style="text-align:center;">Versión de la app: <strong>${CONFIG.APP_VERSION}</strong></div>
     <div class="card">
       <h3>Conexión con Google Sheets</h3>
       <p class="muted">Pega la URL /exec de tu implementación de Apps Script.</p>
