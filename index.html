@@ -8,6 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -159,11 +160,13 @@
   @media(min-width:640px){ .chart-box{height:280px;} }
 
   @media print{
-    .bottomnav, .topbar select, .topbar input, .btn, .sync-dot, .no-print{display:none !important;}
+    .bottomnav, .topbar, .btn, .sync-dot, .no-print{display:none !important;}
     body{background:#fff;}
+    #app{padding-bottom:0;}
     .view{padding:0;}
-    .chart-box{height:260px; page-break-inside:avoid;}
+    .chart-box{height:220px; page-break-inside:avoid;}
     .card, .card-flat{page-break-inside:avoid; box-shadow:none; border:1px solid #ccc;}
+    h3{page-break-after:avoid;}
     #printHeader{display:block !important; border:none; padding:0 0 10px;}
   }
 
