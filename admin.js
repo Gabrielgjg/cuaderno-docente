@@ -487,8 +487,3 @@ function guardarConfigUrl() {
   toast('Probando conexión…');
   refreshFromServer();
 }
-// carga la URL guardada al iniciar
-(function () {
-  const saved = localStorage.getItem('cd_api_url');
-  if (saved) CONFIG.API_URL = saved;
-})();
