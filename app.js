@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v24'
+  APP_VERSION: 'v25'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -28,8 +28,8 @@ const TRIMESTRES = ['Trimestre 1', 'Trimestre 2', 'Trimestre 3'];
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [] },
 
   load() {
     try {
@@ -164,6 +164,11 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la actividad');
     }
     Store.queue.Actividades = [];
+    for (const d of Store.queue.Diagnosticos) {
+      const res = await jsonp('saveDiagnostico', { data: JSON.stringify(d) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el diagnóstico');
+    }
+    Store.queue.Diagnosticos = [];
     Store.persist();
     toast('Sincronizado ✓');
     await refreshFromServer();
