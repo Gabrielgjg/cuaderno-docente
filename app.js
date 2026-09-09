@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v19'
+  APP_VERSION: 'v21'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -321,8 +321,25 @@ function viewDashboardGrupo() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
   ensureResumenAsistencia(ctx.grupoId);
-  const alumnos = Store.alumnosDeGrupo(ctx.grupoId);
+  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const riesgo = alumnosEnRiesgo(ctx.grupoId);
+  const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
+  const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+
+  const informe = alumnos.map(a => {
+    let final = 0;
+    if (rubros.length) {
+      rubros.forEach(r => {
+        const vals = calRows.filter(c => c.alumnoId === a.id && c.rubro === r.rubro).map(c => Number(c.valor));
+        if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
+      });
+    }
+    const asis = contarAsistencia(a.id, ctx.grupoId);
+    const totalAsis = asis.Presente + asis.Ausente + asis.Retardo + asis.Justificado;
+    const pctAsis = totalAsis ? Math.round((asis.Presente / totalAsis) * 100) : null;
+    return { nombre: a.nombre, final: rubros.length ? final.toFixed(1) : '—', pctAsis: pctAsis === null ? '—' : pctAsis + '%' };
+  });
+
   return `
     <div class="row between no-print" style="margin-bottom:4px;">
       <span class="muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</span>
@@ -337,6 +354,16 @@ function viewDashboardGrupo() {
           <span class="tag" style="background:var(--danger); color:#fff;">${x.racha} faltas</span>
         </div>`).join('')}
       </div>` : ''}
+    <h3>Informe del grupo — ${esc(ctx.trimestre)}</h3>
+    <div class="card">
+      <table>
+        <thead><tr><th>Alumno</th><th>Calificación</th><th>% Asistencia</th></tr></thead>
+        <tbody>
+          ${informe.map(r => `<tr><td>${esc(r.nombre)}</td><td>${r.final}</td><td>${r.pctAsis}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      ${rubros.length === 0 ? '<p class="muted" style="margin-top:8px;">No hay encuadre configurado para esta materia/trimestre — las calificaciones se muestran vacías.</p>' : ''}
+    </div>
     <h3>Asistencia acumulada</h3>
     <div class="card chart-box"><canvas id="chartAsistenciaGrupo"></canvas></div>
     <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
