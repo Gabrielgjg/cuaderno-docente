@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v22'
+  APP_VERSION: 'v23'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
