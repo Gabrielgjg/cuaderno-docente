@@ -215,15 +215,15 @@ function renderPerfilDetalle(a) {
   const totalAsist = counts.Presente + counts.Ausente + counts.Retardo + counts.Justificado;
   const pct = totalAsist ? Math.round((counts.Presente / totalAsist) * 100) : 0;
 
-  const incidencias = Store.data.Incidencias.concat(Store.queue.Incidencias).filter(r => r.alumnoId === a.id)
+  const incidencias = Store.merged('Incidencias').filter(r => r.alumnoId === a.id)
     .sort((x, y) => y.fecha.localeCompare(x.fecha));
-  const diarioGrupo = Store.data.Diario.concat(Store.queue.Diario).filter(r => r.grupoId === a.grupoId)
+  const diarioGrupo = Store.merged('Diario').filter(r => r.grupoId === a.grupoId)
     .sort((x, y) => y.fecha.localeCompare(x.fecha)).slice(0, 15);
 
   const califHtml = grupo ? TRIMESTRES.map(tri => {
     const rubros = Store.encuadre(grupo.asignatura, tri);
     if (rubros.length === 0) return '';
-    const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.alumnoId === a.id && c.trimestre === tri);
+    const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === a.id && c.trimestre === tri);
     let final = 0;
     const detalle = rubros.map(r => {
       const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
