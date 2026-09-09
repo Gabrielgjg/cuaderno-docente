@@ -10,10 +10,11 @@ function viewAdmin() {
     { id: 'alumnos', label: 'Alumnos' },
     { id: 'perfil', label: 'Perfil' },
     { id: 'encuadres', label: 'Encuadres' },
+    { id: 'diagnostico', label: 'Diagnóstico' },
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -264,6 +265,8 @@ function renderPerfilDetalle(a) {
     ${totalAsist ? `<div class="card chart-box"><canvas id="chartPerfilAsistencia"></canvas></div>` : ''}
 
     <h3>Calificaciones</h3>
+    ${(() => { const diag = Store.merged('Diagnosticos').find(d => d.alumnoId === a.id);
+      return diag ? `<div class="card-flat row between"><span>Diagnóstico inicial de ciclo (${esc(diag.fecha)})</span><span class="tag">${diag.puntaje}%</span></div>` : ''; })()}
     ${califHtml}
 
     <h3>Incidencias (${incidencias.length})</h3>
@@ -384,6 +387,68 @@ async function guardarEncuadre(asignaturaExistente) {
   } catch (e) { /* se reintentará en el próximo refresh manual */ }
 }
 
+/* ---------------- DIAGNÓSTICO INICIAL DE CICLO ---------------- */
+function adminDiagnostico() {
+  const grupos = Store.activeGrupos();
+  if (grupos.length === 0) return '<p class="muted">Da de alta un grupo primero.</p>';
+  return `
+    <div class="card">
+      <h3>Diagnóstico inicial de ciclo</h3>
+      <p class="muted">No cuenta como calificación — es solo un punto de referencia para ver el avance del alumno durante el ciclo (ej. resultado importado de ZipGrade).</p>
+      <div class="field"><label>Grupo</label>
+        <select id="diagGrupo" onchange="renderDiagnosticoLista()">
+          ${grupos.map(g => `<option value="${g.id}">${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+        </select>
+      </div>
+      <div id="diagnosticoListaWrap">${diagnosticoListaHTML(grupos[0].id)}</div>
+    </div>`;
+}
+function diagnosticoListaHTML(grupoId) {
+  const alumnos = Store.alumnosDeGrupo(grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  if (alumnos.length === 0) return '<p class="muted">Sin alumnos en este grupo.</p>';
+  const regs = Store.merged('Diagnosticos').filter(d => d.grupoId === grupoId);
+  return alumnos.map(a => {
+    const reg = regs.find(d => d.alumnoId === a.id);
+    return `<div class="roster-item" data-alumno="${a.id}" data-reg="${reg ? reg.id : ''}">
+      <span class="roster-name">${esc(a.nombre)}</span>
+      <input type="number" min="0" max="100" step="0.1" value="${reg ? reg.puntaje : ''}" placeholder="%"
+        style="width:70px; padding:6px; border:1px solid var(--line); border-radius:6px; text-align:center;"
+        onchange="guardarDiagnostico(this)">
+    </div>`;
+  }).join('');
+}
+function renderDiagnosticoLista() {
+  const grupoId = document.getElementById('diagGrupo').value;
+  document.getElementById('diagnosticoListaWrap').innerHTML = diagnosticoListaHTML(grupoId);
+}
+function guardarDiagnostico(input) {
+  const item = input.closest('.roster-item');
+  const alumnoId = item.dataset.alumno;
+  const regId = item.dataset.reg;
+  const grupoId = document.getElementById('diagGrupo').value;
+  const grupo = Store.data.Grupos.find(g => g.id === grupoId);
+
+  if (input.value === '') {
+    if (regId) {
+      Store.data.Diagnosticos = Store.data.Diagnosticos.filter(d => d.id !== regId);
+      Store.queue.Diagnosticos = Store.queue.Diagnosticos.filter(d => d.id !== regId);
+      Store.persist();
+      jsonp('deleteDiagnostico', { id: regId }).catch(() => {});
+      item.dataset.reg = '';
+    }
+    return;
+  }
+  const puntaje = parseFloat(input.value);
+  if (isNaN(puntaje) || puntaje < 0 || puntaje > 100) { toast('Puntaje inválido (0–100)'); return; }
+  const row = { id: regId || uid(), alumnoId, grupoId, asignatura: grupo.asignatura, puntaje, fecha: todayISO(), notas: '' };
+  Store.upsertLocal('Diagnosticos', row);
+  Store.enqueue('Diagnosticos', row);
+  Store.persist();
+  syncPending();
+  item.dataset.reg = row.id;
+  toast('Guardado');
+}
+
 /* ---------------- IMPORTAR (CSV / Excel exportado + OCR con cámara) ---------------- */
 function adminImportar() {
   const grupos = Store.activeGrupos();
@@ -405,7 +470,38 @@ function adminImportar() {
       <input type="file" id="ocrFile" accept="image/*" capture="environment" onchange="procesarOCR(this)">
       <div id="ocrProgress" class="muted" style="margin-top:8px;"></div>
     </div>
+    <div class="card">
+      <h3>Exportar para ZipGrade</h3>
+      <p class="muted">Genera un CSV con el formato que pide ZipGrade para cargar tu lista de alumnos (nombre, apellidos e ID numérico) y así poder escanear e importar sus exámenes de opción múltiple.</p>
+      <div class="field"><label>Grupo</label>
+        <select id="zgGrupo">${grupos.map(g => `<option value="${g.id}">${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}</select>
+      </div>
+      <button class="btn block secondary" onclick="exportarZipGrade()">Descargar CSV para ZipGrade</button>
+    </div>
   `;
+}
+function exportarZipGrade() {
+  const grupoId = document.getElementById('zgGrupo').value;
+  const grupo = Store.data.Grupos.find(g => g.id === grupoId);
+  const alumnos = Store.alumnosDeGrupo(grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  if (!grupo || alumnos.length === 0) { toast('Selecciona un grupo con alumnos'); return; }
+  const filas = [['ZipGrade ID', 'Apellidos', 'Nombre(s)', 'Clase']];
+  alumnos.forEach((a, i) => {
+    const partes = a.nombre.trim().split(/\s+/);
+    let apellidos, nombres;
+    if (partes.length >= 3) { apellidos = partes.slice(0, 2).join(' '); nombres = partes.slice(2).join(' '); }
+    else if (partes.length === 2) { apellidos = partes[0]; nombres = partes[1]; }
+    else { apellidos = partes[0] || ''; nombres = ''; }
+    filas.push([i + 1, apellidos, nombres, `${grupo.grado}${grupo.grupo}`]);
+  });
+  const csv = filas.map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `zipgrade_${grupo.grado}${grupo.grupo}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast('CSV descargado — revisa la separación de nombre/apellido antes de subirlo');
 }
 function procesarCSV(input) {
   const file = input.files[0];
