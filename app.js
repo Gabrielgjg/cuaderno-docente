@@ -7,8 +7,13 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v23'
+  APP_VERSION: 'v24'
 };
+// Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
+(function () {
+  const saved = localStorage.getItem('cd_api_url');
+  if (saved) CONFIG.API_URL = saved;
+})();
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
 const TIPOS_DIARIO = [
@@ -578,13 +583,18 @@ function contarAsistencia(alumnoId, grupoId) {
 }
 let resumenAsistenciaCache = {};
 let resumenAsistenciaCargando = {};
+let _renderDebounceTimer = null;
+function renderCurrentViewDebounced() {
+  clearTimeout(_renderDebounceTimer);
+  _renderDebounceTimer = setTimeout(() => renderCurrentView(), 150);
+}
 function ensureResumenAsistencia(grupoId) {
   if (!grupoId || resumenAsistenciaCache[grupoId] || resumenAsistenciaCargando[grupoId]) return;
   resumenAsistenciaCargando[grupoId] = true;
   jsonp('getResumenAsistencia', { grupoId })
     .then(res => { if (res && res.ok) resumenAsistenciaCache[grupoId] = res.data; })
     .catch(() => {})
-    .finally(() => { resumenAsistenciaCargando[grupoId] = false; renderCurrentView(); });
+    .finally(() => { resumenAsistenciaCargando[grupoId] = false; renderCurrentViewDebounced(); });
 }
 function rachaFaltasConsecutivas(alumnoId, grupoId) {
   const cache = resumenAsistenciaCache[grupoId];
