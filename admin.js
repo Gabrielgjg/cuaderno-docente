@@ -75,32 +75,37 @@ function guardarGrupo(id) {
 /* ---------------- ALUMNOS ---------------- */
 let alumnosFiltro = { texto: '', grupoId: '' };
 function adminAlumnos() {
-  const grupos = Store.data.Grupos;
   const gruposActivos = Store.activeGrupos();
+  return `
+    <button class="btn block secondary" onclick="modalAlumno()">+ Nuevo alumno</button>
+    <div class="row" style="margin-top:10px;">
+      <input id="alumFiltroTexto" placeholder="Buscar por nombre…" value="${esc(alumnosFiltro.texto)}" oninput="alumnosFiltro.texto=this.value; renderAlumnosLista();" style="flex:1; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+      <select id="alumFiltroGrupo" onchange="alumnosFiltro.grupoId=this.value; renderAlumnosLista();" style="padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+        <option value="">Todos los grupos</option>
+        ${gruposActivos.map(g => `<option value="${g.id}" ${alumnosFiltro.grupoId === g.id ? 'selected' : ''}>${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+      </select>
+    </div>
+    <div id="alumnosListaWrap" style="margin-top:10px;">${alumnosListaHTML()}</div>`;
+}
+function alumnosListaHTML() {
+  const grupos = Store.data.Grupos;
   let alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE')
     .slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (alumnosFiltro.texto) alumnos = alumnos.filter(a => a.nombre.toLowerCase().includes(alumnosFiltro.texto.toLowerCase()));
   if (alumnosFiltro.grupoId) alumnos = alumnos.filter(a => a.grupoId === alumnosFiltro.grupoId);
   const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
-  return `
-    <button class="btn block secondary" onclick="modalAlumno()">+ Nuevo alumno</button>
-    <div class="row" style="margin-top:10px;">
-      <input id="alumFiltroTexto" placeholder="Buscar por nombre…" value="${esc(alumnosFiltro.texto)}" oninput="alumnosFiltro.texto=this.value; renderCurrentView();" style="flex:1; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
-      <select id="alumFiltroGrupo" onchange="alumnosFiltro.grupoId=this.value; renderCurrentView();" style="padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
-        <option value="">Todos los grupos</option>
-        ${gruposActivos.map(g => `<option value="${g.id}" ${alumnosFiltro.grupoId === g.id ? 'selected' : ''}>${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
-      </select>
-    </div>
-    <div style="margin-top:10px;">
-    ${alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
+  return alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
       <div class="card-flat row between">
         <div><strong>${esc(a.nombre)}</strong>${a.notas ? ' <span class="tag">nota</span>' : ''}<br><span class="muted">${grupoName(a.grupoId)}</span></div>
         <div class="row">
           <button class="btn small ghost" onclick="abrirNuevaIncidencia('${a.id}','${attrJs(a.nombre)}','${a.grupoId}')">Incidencia</button>
           <button class="btn small ghost" onclick="modalAlumno('${a.id}')">Editar</button>
         </div>
-      </div>`).join('')}
-    </div>`;
+      </div>`).join('');
+}
+function renderAlumnosLista() {
+  const el = document.getElementById('alumnosListaWrap');
+  if (el) el.innerHTML = alumnosListaHTML();
 }
 function modalAlumno(id) {
   const a = id ? Store.data.Alumnos.find(x => x.id === id) : null;
@@ -192,21 +197,27 @@ async function darDeBajaUI(alumnoId) {
 let perfilFiltro = '';
 let perfilAlumnoId = null;
 function adminPerfil() {
+  const alumnoActivo = perfilAlumnoId ? Store.data.Alumnos.find(a => a.id === perfilAlumnoId && a.activo !== false && a.activo !== 'FALSE') : null;
+  if (alumnoActivo) return renderPerfilDetalle(alumnoActivo);
+  return `
+    <input id="perfilBuscar" placeholder="Buscar alumno por nombre…" value="${esc(perfilFiltro)}" oninput="perfilFiltro=this.value; renderPerfilLista();" style="width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); margin-bottom:10px;">
+    <div id="perfilListaWrap" style="max-height:340px; overflow-y:auto;">${perfilListaHTML()}</div>
+  `;
+}
+function perfilListaHTML() {
   const grupos = Store.data.Grupos;
   let alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE').slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (perfilFiltro) alumnos = alumnos.filter(a => a.nombre.toLowerCase().includes(perfilFiltro.toLowerCase()));
   const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
-  return `
-    <input id="perfilBuscar" placeholder="Buscar alumno por nombre…" value="${esc(perfilFiltro)}" oninput="perfilFiltro=this.value; renderCurrentView();" style="width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); margin-bottom:10px;">
-    ${!perfilAlumnoId || !alumnos.find(a => a.id === perfilAlumnoId) ? `
-      <div style="max-height:340px; overflow-y:auto;">
-        ${alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
+  return alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
           <div class="card-flat row between" style="cursor:pointer;" onclick="perfilAlumnoId='${a.id}'; renderCurrentView();">
             <div><strong>${esc(a.nombre)}</strong><br><span class="muted">${grupoName(a.grupoId)}</span></div>
             <span class="muted">Ver →</span>
-          </div>`).join('')}
-      </div>` : renderPerfilDetalle(alumnos.find(a => a.id === perfilAlumnoId))}
-  `;
+          </div>`).join('');
+}
+function renderPerfilLista() {
+  const el = document.getElementById('perfilListaWrap');
+  if (el) el.innerHTML = perfilListaHTML();
 }
 function renderPerfilDetalle(a) {
   const grupo = Store.data.Grupos.find(g => g.id === a.grupoId);
