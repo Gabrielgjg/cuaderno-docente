@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v18'
+  APP_VERSION: 'v19'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -726,7 +726,7 @@ function califVistaGrid(grupo, rubros) {
               style="width:52px; padding:6px; border:1px solid var(--line); border-radius:6px; text-align:center;"
               onchange="guardarCeldaCalificacion(this)"></td>`;
           }).join('')}
-          <td style="text-align:center;"><strong>${finalPorAlumno[a.id].toFixed(1)}</strong></td>
+          <td style="text-align:center;"><strong data-promedio="${a.id}">${finalPorAlumno[a.id].toFixed(1)}</strong></td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -814,7 +814,8 @@ async function eliminarActividad(id) {
   renderCurrentView();
 }
 function guardarCeldaCalificacion(input) {
-  const alumnoId = input.dataset.alumno, actividadId = input.dataset.actividad, rubro = input.dataset.rubro, regId = input.dataset.reg;
+  const alumnoId = input.dataset.alumno, actividadId = input.dataset.actividad, rubro = input.dataset.rubro;
+  const regId = input.dataset.reg;
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   const act = Store.merged('Actividades').find(x => x.id === actividadId);
 
@@ -824,12 +825,17 @@ function guardarCeldaCalificacion(input) {
       Store.queue.Calificaciones = Store.queue.Calificaciones.filter(c => c.id !== regId);
       Store.persist();
       jsonp('deleteCalificacion', { id: regId }).catch(() => {});
-      renderCurrentView();
+      input.dataset.reg = '';
+      actualizarPromedioAlumno(alumnoId, grupo);
     }
     return;
   }
   const valor = parseFloat(input.value);
-  if (isNaN(valor) || valor < 0 || valor > 10) { toast('Calificación inválida (0–10)'); renderCurrentView(); return; }
+  if (isNaN(valor) || valor < 0 || valor > 10) {
+    toast('Calificación inválida (0–10)');
+    input.value = regId ? (Store.merged('Calificaciones').find(c => c.id === regId) || {}).valor || '' : '';
+    return;
+  }
   const row = {
     id: regId || uid(), alumnoId, grupoId: ctx.grupoId, asignatura: grupo.asignatura, trimestre: ctx.trimestre,
     rubro, valor, evidencia: act ? act.nombre : '', fecha: act ? act.fecha : todayISO(), actividadId
@@ -838,7 +844,20 @@ function guardarCeldaCalificacion(input) {
   Store.enqueue('Calificaciones', row);
   Store.persist();
   syncPending();
-  renderCurrentView();
+  input.dataset.reg = row.id; // para que la siguiente edición actualice, no duplique
+  actualizarPromedioAlumno(alumnoId, grupo);
+}
+function actualizarPromedioAlumno(alumnoId, grupo) {
+  const el = document.querySelector(`[data-promedio="${alumnoId}"]`);
+  if (!el || !grupo) return;
+  const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
+  const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === alumnoId && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  let final = 0;
+  rubros.forEach(r => {
+    const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
+    if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
+  });
+  el.textContent = final.toFixed(1);
 }
 function alumnoCalifCard(alumno, rubros, calRows) {
   const porRubro = {};
@@ -966,8 +985,64 @@ function viewDiario() {
     </div>
     <h3>Historial del grupo</h3>
     ${entradas.length === 0 ? '<p class="muted">Sin entradas todavía.</p>' :
-      entradas.map(e => `<div class="diary-entry"><div class="diary-type">${esc(e.tipo)} · ${esc(e.fecha)}</div><div>${esc(e.texto)}</div></div>`).join('')}
+      entradas.map(e => `<div class="diary-entry">
+        <div class="row between">
+          <div class="diary-type">${esc(e.tipo)} · ${esc(e.fecha)}</div>
+          <button class="btn small ghost" onclick="editarDiario('${e.id}')">Editar</button>
+        </div>
+        <div>${esc(e.texto)}</div>
+      </div>`).join('')}
   `;
+}
+function editarDiario(id) {
+  const entry = Store.merged('Diario').find(x => x.id === id);
+  if (!entry) return;
+  openModal(`
+    <h2>Editar entrada del diario</h2>
+    <div class="field"><label>Tipo</label>
+      <div class="chip-list" id="diarioEditTipoChips">
+        ${TIPOS_DIARIO.map(t => `<span class="chip ${t.id === entry.tipo ? 'active' : ''}" data-t="${t.id}" onclick="selectChip(this)">${t.label}</span>`).join('')}
+      </div>
+    </div>
+    <div class="field"><label>Fecha</label><input id="diarioEditFecha" type="date" value="${entry.fecha}"></div>
+    <div class="field"><label>Nota</label><textarea id="diarioEditTexto">${esc(entry.texto)}</textarea></div>
+    <button class="btn block" onclick="guardarEdicionDiario('${id}')">Guardar cambios</button>
+    <button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarDiario('${id}')">Eliminar entrada</button>
+  `);
+}
+function guardarEdicionDiario(id) {
+  const entry = Store.merged('Diario').find(x => x.id === id);
+  if (!entry) return;
+  const texto = document.getElementById('diarioEditTexto').value.trim();
+  if (!texto) { toast('Escribe algo primero'); return; }
+  const tipo = document.querySelector('#diarioEditTipoChips .chip.active').dataset.t;
+  const row = Object.assign({}, entry, { tipo, texto, fecha: document.getElementById('diarioEditFecha').value });
+  Store.upsertLocal('Diario', row);
+  Store.enqueue('Diario', row);
+  Store.persist();
+  closeModal();
+  toast('Entrada actualizada');
+  syncPending();
+  renderCurrentView();
+}
+function confirmarEliminarDiario(id) {
+  openModal(`
+    <h2>Eliminar entrada</h2>
+    <p>¿Seguro que quieres eliminar esta entrada del diario?</p>
+    <div class="row">
+      <button class="btn secondary block" onclick="closeModal()">Cancelar</button>
+      <button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarDiario('${id}')">Eliminar</button>
+    </div>
+  `);
+}
+async function eliminarDiario(id) {
+  Store.data.Diario = Store.data.Diario.filter(x => x.id !== id);
+  Store.queue.Diario = Store.queue.Diario.filter(x => x.id !== id);
+  Store.persist();
+  closeModal();
+  toast('Entrada eliminada');
+  try { await jsonp('deleteDiario', { id }); } catch (e) {}
+  renderCurrentView();
 }
 function selectChip(el) {
   el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
