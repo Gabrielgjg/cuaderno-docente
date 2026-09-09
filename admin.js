@@ -388,19 +388,21 @@ async function guardarEncuadre(asignaturaExistente) {
 }
 
 /* ---------------- DIAGNÓSTICO INICIAL DE CICLO ---------------- */
+let diagGrupoSeleccionado = null;
 function adminDiagnostico() {
   const grupos = Store.activeGrupos();
   if (grupos.length === 0) return '<p class="muted">Da de alta un grupo primero.</p>';
+  if (!diagGrupoSeleccionado || !grupos.find(g => g.id === diagGrupoSeleccionado)) diagGrupoSeleccionado = grupos[0].id;
   return `
     <div class="card">
       <h3>Diagnóstico inicial de ciclo</h3>
       <p class="muted">No cuenta como calificación — es solo un punto de referencia para ver el avance del alumno durante el ciclo (ej. resultado importado de ZipGrade).</p>
       <div class="field"><label>Grupo</label>
-        <select id="diagGrupo" onchange="renderDiagnosticoLista()">
-          ${grupos.map(g => `<option value="${g.id}">${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+        <select id="diagGrupo" onchange="diagGrupoSeleccionado=this.value; renderDiagnosticoLista();">
+          ${grupos.map(g => `<option value="${g.id}" ${g.id === diagGrupoSeleccionado ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
         </select>
       </div>
-      <div id="diagnosticoListaWrap">${diagnosticoListaHTML(grupos[0].id)}</div>
+      <div id="diagnosticoListaWrap">${diagnosticoListaHTML(diagGrupoSeleccionado)}</div>
     </div>`;
 }
 function diagnosticoListaHTML(grupoId) {
@@ -419,13 +421,14 @@ function diagnosticoListaHTML(grupoId) {
 }
 function renderDiagnosticoLista() {
   const grupoId = document.getElementById('diagGrupo').value;
+  diagGrupoSeleccionado = grupoId;
   document.getElementById('diagnosticoListaWrap').innerHTML = diagnosticoListaHTML(grupoId);
 }
 function guardarDiagnostico(input) {
   const item = input.closest('.roster-item');
   const alumnoId = item.dataset.alumno;
   const regId = item.dataset.reg;
-  const grupoId = document.getElementById('diagGrupo').value;
+  const grupoId = diagGrupoSeleccionado;
   const grupo = Store.data.Grupos.find(g => g.id === grupoId);
 
   if (input.value === '') {
