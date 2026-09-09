@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v16'
+  APP_VERSION: 'v17'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -60,6 +60,15 @@ const Store = {
   alumnosDeGrupo(grupoId) { return this.data.Alumnos.filter(a => a.grupoId === grupoId && (a.activo === true || a.activo === 'TRUE' || a.activo === 'VERDADERO')); },
   encuadre(asignatura, trimestre) {
     return this.data.Encuadres.filter(e => e.asignatura === asignatura && e.trimestre === trimestre && (e.activo === true || e.activo === 'TRUE' || e.activo === 'VERDADERO'));
+  },
+  // Combina lo ya sincronizado con lo pendiente de la cola SIN duplicar:
+  // un registro recién capturado vive en ambos arreglos hasta que sincroniza,
+  // así que se combina por id (la versión de la cola, más reciente, gana).
+  merged(sheet) {
+    const map = new Map();
+    this.data[sheet].forEach(r => map.set(r.id, r));
+    this.queue[sheet].forEach(r => map.set(r.id, r));
+    return Array.from(map.values());
   }
 };
 Store.load();
@@ -380,7 +389,7 @@ function renderDashboardCharts() {
   const elE = document.getElementById('chartEntregas');
   if (elE) {
     destroyChart('chartEntregas');
-    const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+    const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
     const pcts = rubros.map(r => {
       if (alumnos.length === 0) return 0;
       const entregaron = new Set(calRows.filter(c => c.rubro === r.rubro).map(c => c.alumnoId)).size;
@@ -399,7 +408,7 @@ function renderDashboardCharts() {
     destroyChart('chartDistribucion');
     let aprobado = 0, reprobado = 0, sinCalificar = 0;
     alumnos.forEach(a => {
-      const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.alumnoId === a.id && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+      const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === a.id && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
       if (calRows.length === 0) { sinCalificar++; return; }
       let final = 0;
       rubros.forEach(r => {
@@ -447,7 +456,7 @@ function viewAsistenciaLista() {
   if (alumnos.length === 0) return `<div class="empty"><p class="muted">Este grupo no tiene alumnos activos. Agrégalos en Admin.</p></div>`;
 
   const existentes = {};
-  Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => {
+  Store.merged('Asistencia').forEach(r => {
     if (r.grupoId === ctx.grupoId && r.fecha === ctx.fecha) existentes[r.alumnoId] = r;
   });
 
@@ -472,7 +481,7 @@ function viewAsistenciaGrid() {
   if (!asistSemanaInicio) asistSemanaInicio = lunesDe(todayISO());
   const dias = [0, 1, 2, 3, 4].map(i => sumarDias(asistSemanaInicio, i));
   const nombresDia = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie'];
-  const registros = Store.data.Asistencia.concat(Store.queue.Asistencia).filter(r => r.grupoId === ctx.grupoId);
+  const registros = Store.merged('Asistencia').filter(r => r.grupoId === ctx.grupoId);
 
   return `
     <div class="row between" style="margin:10px 0;">
@@ -504,7 +513,7 @@ function viewAsistenciaGrid() {
 }
 function ciclarAsistenciaCelda(alumnoId, fecha, el) {
   const ORDEN = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
-  const registro = Store.data.Asistencia.concat(Store.queue.Asistencia).find(r => r.alumnoId === alumnoId && r.grupoId === ctx.grupoId && r.fecha === fecha);
+  const registro = Store.merged('Asistencia').find(r => r.alumnoId === alumnoId && r.grupoId === ctx.grupoId && r.fecha === fecha);
   const curIdx = registro ? ORDEN.indexOf(registro.estatus) : -1;
   const nextIdx = curIdx + 1;
   if (nextIdx >= ORDEN.length) {
@@ -535,7 +544,7 @@ function contarAsistencia(alumnoId, grupoId) {
   }
   // Respaldo mientras llega el resumen del servidor: solo ve la ventana reciente local.
   const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
-  Store.data.Asistencia.concat(Store.queue.Asistencia).forEach(r => {
+  Store.merged('Asistencia').forEach(r => {
     if (r.alumnoId === alumnoId && counts[r.estatus] !== undefined) counts[r.estatus]++;
   });
   return counts;
@@ -554,7 +563,7 @@ function rachaFaltasConsecutivas(alumnoId, grupoId) {
   const cache = resumenAsistenciaCache[grupoId];
   if (cache && cache[alumnoId] && typeof cache[alumnoId].racha === 'number') return cache[alumnoId].racha;
   // Respaldo local (ventana reciente) mientras llega el resumen del servidor.
-  const regs = Store.data.Asistencia.concat(Store.queue.Asistencia)
+  const regs = Store.merged('Asistencia')
     .filter(r => r.alumnoId === alumnoId && r.grupoId === grupoId)
     .sort((a, b) => a.fecha.localeCompare(b.fecha));
   let racha = 0;
@@ -637,7 +646,7 @@ function guardarAsistencia() {
 let califVista = 'grid';
 function abrevRubro(rubro) { return (rubro || '').trim().slice(0, 2).toUpperCase(); }
 function actividadesDe(grupo) {
-  return Store.data.Actividades.concat(Store.queue.Actividades)
+  return Store.merged('Actividades')
     .filter(x => x.asignatura === grupo.asignatura && x.trimestre === ctx.trimestre && x.activo !== false)
     .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
 }
@@ -661,13 +670,13 @@ function viewCalificaciones() {
 }
 function califVistaAlumno(grupo, rubros) {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
   return alumnos.map(a => alumnoCalifCard(a, rubros, calRows.filter(c => c.alumnoId === a.id))).join('');
 }
 function califVistaGrid(grupo, rubros) {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const actividades = actividadesDe(grupo);
-  const calRows = Store.data.Calificaciones.concat(Store.queue.Calificaciones).filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
 
   const formNueva = `
     <div class="card">
@@ -741,7 +750,7 @@ function crearActividad() {
 function guardarCeldaCalificacion(input) {
   const alumnoId = input.dataset.alumno, actividadId = input.dataset.actividad, rubro = input.dataset.rubro, regId = input.dataset.reg;
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
-  const act = Store.data.Actividades.concat(Store.queue.Actividades).find(x => x.id === actividadId);
+  const act = Store.merged('Actividades').find(x => x.id === actividadId);
 
   if (input.value === '') {
     if (regId) {
@@ -791,7 +800,7 @@ function alumnoCalifCard(alumno, rubros, calRows) {
   </div>`;
 }
 function verEvidencias(alumnoId, rubro) {
-  const rows = Store.data.Calificaciones.concat(Store.queue.Calificaciones)
+  const rows = Store.merged('Calificaciones')
     .filter(c => c.alumnoId === alumnoId && c.rubro === rubro && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
   const alumno = Store.data.Alumnos.find(a => a.id === alumnoId);
   openModal(`
@@ -808,7 +817,7 @@ function verEvidencias(alumnoId, rubro) {
   `);
 }
 function editarEvidencia(id) {
-  const row = Store.data.Calificaciones.concat(Store.queue.Calificaciones).find(c => c.id === id);
+  const row = Store.merged('Calificaciones').find(c => c.id === id);
   if (!row) return;
   openModal(`
     <h2>Editar evidencia</h2>
@@ -875,7 +884,7 @@ function guardarEvidencia(alumnoId, rubro, asignatura) {
    ================================================================ */
 function viewDiario() {
   if (!ctx.grupoId) return `<div class="empty"><p class="muted">Selecciona un grupo arriba.</p></div>`;
-  const entradas = Store.data.Diario.concat(Store.queue.Diario)
+  const entradas = Store.merged('Diario')
     .filter(d => d.grupoId === ctx.grupoId)
     .sort((a, b) => (b.fecha + (b.timestamp || '')).localeCompare(a.fecha + (a.timestamp || '')));
 
