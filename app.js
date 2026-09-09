@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v17'
+  APP_VERSION: 'v18'
 };
 
 const ESTATUS_ASISTENCIA = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
@@ -712,7 +712,7 @@ function califVistaGrid(grupo, rubros) {
     <table style="min-width:${360 + actividades.length * 84}px;">
       <thead><tr>
         <th style="position:sticky; left:0; background:var(--paper); min-width:140px;">Alumno</th>
-        ${actividades.map(act => `<th style="min-width:78px;" title="${esc(act.rubro)} · ${esc(act.fecha)}">${abrevRubro(act.rubro)}<br><span style="font-weight:400; font-size:.68rem;">${esc((act.nombre || '').slice(0, 14))}</span></th>`).join('')}
+        ${actividades.map(act => `<th style="min-width:78px; cursor:pointer;" title="Toca para editar · ${esc(act.rubro)} · ${esc(act.fecha)}" onclick="editarActividad('${act.id}')">${abrevRubro(act.rubro)} ✎<br><span style="font-weight:400; font-size:.68rem;">${esc((act.nombre || '').slice(0, 14))}</span></th>`).join('')}
         <th style="min-width:56px;">Prom.</th>
       </tr></thead>
       <tbody>
@@ -745,6 +745,72 @@ function crearActividad() {
   Store.persist();
   toast('Actividad agregada');
   syncPending();
+  renderCurrentView();
+}
+function editarActividad(id) {
+  const act = Store.merged('Actividades').find(x => x.id === id);
+  if (!act) return;
+  const grupo = Store.data.Grupos.find(g => g.id === act.grupoId);
+  const rubros = grupo ? Store.encuadre(act.asignatura, act.trimestre) : [];
+  openModal(`
+    <h2>Editar actividad</h2>
+    <div class="field"><label>Rubro</label>
+      <select id="actEditRubro" style="width:100%; padding:9px; border:1px solid var(--line); border-radius:8px;">
+        ${rubros.map(r => `<option value="${esc(r.rubro)}" ${r.rubro === act.rubro ? 'selected' : ''}>${esc(r.rubro)} (${abrevRubro(r.rubro)})</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Nombre</label><input id="actEditNombre" value="${esc(act.nombre)}"></div>
+    <div class="field"><label>Fecha</label><input id="actEditFecha" type="date" value="${act.fecha}"></div>
+    <button class="btn block" onclick="guardarEdicionActividad('${id}')">Guardar cambios</button>
+    <button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarActividad('${id}')">Eliminar actividad</button>
+  `);
+}
+function guardarEdicionActividad(id) {
+  const act = Store.merged('Actividades').find(x => x.id === id);
+  if (!act) return;
+  const nombre = document.getElementById('actEditNombre').value.trim();
+  if (!nombre) { toast('Ponle un nombre a la actividad'); return; }
+  const row = Object.assign({}, act, {
+    rubro: document.getElementById('actEditRubro').value,
+    nombre,
+    fecha: document.getElementById('actEditFecha').value
+  });
+  Store.upsertLocal('Actividades', row);
+  Store.enqueue('Actividades', row);
+  Store.persist();
+  closeModal();
+  toast('Actividad actualizada');
+  syncPending();
+  renderCurrentView();
+}
+function confirmarEliminarActividad(id) {
+  const act = Store.merged('Actividades').find(x => x.id === id);
+  const relacionadas = Store.merged('Calificaciones').filter(c => c.actividadId === id);
+  openModal(`
+    <h2>Eliminar actividad</h2>
+    <p>¿Eliminar <strong>${esc(act ? act.nombre : '')}</strong>?</p>
+    ${relacionadas.length ? `<p class="muted">Esto también borrará las ${relacionadas.length} calificación(es) ya capturadas para esta actividad.</p>` : ''}
+    <div class="row">
+      <button class="btn secondary block" onclick="closeModal()">Cancelar</button>
+      <button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarActividad('${id}')">Eliminar</button>
+    </div>
+  `);
+}
+async function eliminarActividad(id) {
+  const relacionadas = Store.merged('Calificaciones').filter(c => c.actividadId === id);
+  relacionadas.forEach(c => {
+    Store.data.Calificaciones = Store.data.Calificaciones.filter(x => x.id !== c.id);
+    Store.queue.Calificaciones = Store.queue.Calificaciones.filter(x => x.id !== c.id);
+  });
+  Store.data.Actividades = Store.data.Actividades.filter(x => x.id !== id);
+  Store.queue.Actividades = Store.queue.Actividades.filter(x => x.id !== id);
+  Store.persist();
+  closeModal();
+  toast('Actividad eliminada');
+  try {
+    for (const c of relacionadas) await jsonp('deleteCalificacion', { id: c.id });
+    await jsonp('deleteActividad', { id });
+  } catch (e) { /* se puede reintentar más tarde */ }
   renderCurrentView();
 }
 function guardarCeldaCalificacion(input) {
