@@ -528,13 +528,28 @@ function procesarCSV(input) {
   };
   reader.readAsText(file, 'UTF-8');
 }
+let _tesseractCargando = null;
+function cargarTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (_tesseractCargando) return _tesseractCargando;
+  _tesseractCargando = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js';
+    s.onload = resolve;
+    s.onerror = reject;
+    document.body.appendChild(s);
+  });
+  return _tesseractCargando;
+}
 async function procesarOCR(input) {
   const file = input.files[0];
   if (!file) return;
   const grupoId = document.getElementById('ocrGrupo').value;
   const prog = document.getElementById('ocrProgress');
-  prog.textContent = 'Reconociendo texto de la imagen…';
+  prog.textContent = 'Preparando lector de texto…';
   try {
+    await cargarTesseract();
+    prog.textContent = 'Reconociendo texto de la imagen…';
     const result = await Tesseract.recognize(file, 'spa', {
       logger: (m) => { if (m.status === 'recognizing text') prog.textContent = 'Reconociendo… ' + Math.round(m.progress * 100) + '%'; }
     });
