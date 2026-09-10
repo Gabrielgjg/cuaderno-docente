@@ -196,12 +196,20 @@ async function darDeBajaUI(alumnoId) {
 
 /* ---------------- PERFIL DE ALUMNO ---------------- */
 let perfilFiltro = '';
+let perfilFiltroGrupo = '';
 let perfilAlumnoId = null;
 function adminPerfil() {
   const alumnoActivo = perfilAlumnoId ? Store.data.Alumnos.find(a => a.id === perfilAlumnoId && a.activo !== false && a.activo !== 'FALSE') : null;
   if (alumnoActivo) return renderPerfilDetalle(alumnoActivo);
+  const gruposActivos = Store.activeGrupos();
   return `
-    <input id="perfilBuscar" placeholder="Buscar alumno por nombre…" value="${esc(perfilFiltro)}" oninput="perfilFiltro=this.value; renderPerfilLista();" style="width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); margin-bottom:10px;">
+    <div class="row" style="margin-bottom:10px;">
+      <input id="perfilBuscar" placeholder="Buscar alumno por nombre…" value="${esc(perfilFiltro)}" oninput="perfilFiltro=this.value; renderPerfilLista();" style="flex:1; padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+      <select id="perfilFiltroGrupoSel" onchange="perfilFiltroGrupo=this.value; renderPerfilLista();" style="padding:9px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised);">
+        <option value="">Todos los grupos</option>
+        ${gruposActivos.map(g => `<option value="${g.id}" ${perfilFiltroGrupo === g.id ? 'selected' : ''}>${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+      </select>
+    </div>
     <div id="perfilListaWrap" style="max-height:340px; overflow-y:auto;">${perfilListaHTML()}</div>
   `;
 }
@@ -209,6 +217,7 @@ function perfilListaHTML() {
   const grupos = Store.data.Grupos;
   let alumnos = Store.data.Alumnos.filter(a => a.activo !== false && a.activo !== 'FALSE').slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
   if (perfilFiltro) alumnos = alumnos.filter(a => a.nombre.toLowerCase().includes(perfilFiltro.toLowerCase()));
+  if (perfilFiltroGrupo) alumnos = alumnos.filter(a => a.grupoId === perfilFiltroGrupo);
   const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
   return alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
           <div class="card-flat row between" style="cursor:pointer;" onclick="perfilAlumnoId='${a.id}'; renderCurrentView();">
