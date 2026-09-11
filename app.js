@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v28'
+  APP_VERSION: 'v29'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -23,13 +23,60 @@ const TIPOS_DIARIO = [
   { id: 'incidencia', label: 'Incidencia' }
 ];
 const TRIMESTRES = ['Trimestre 1', 'Trimestre 2', 'Trimestre 3'];
+const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
+const MODULOS = [
+  { modulo: 1, inicio: '07:00', fin: '07:50' },
+  { modulo: 2, inicio: '07:50', fin: '08:40' },
+  { modulo: 3, inicio: '08:40', fin: '09:30' },
+  { modulo: 4, inicio: '10:00', fin: '10:50' },
+  { modulo: 5, inicio: '10:50', fin: '11:40' },
+  { modulo: 6, inicio: '11:40', fin: '12:30' },
+  { modulo: 7, inicio: '12:30', fin: '13:20' },
+  { modulo: 8, inicio: '13:40', fin: '14:30' },
+  { modulo: 9, inicio: '14:30', fin: '15:20' },
+  { modulo: 10, inicio: '15:20', fin: '16:10' },
+  { modulo: 11, inicio: '16:40', fin: '17:30' },
+  { modulo: 12, inicio: '17:30', fin: '18:20' },
+  { modulo: 13, inicio: '18:20', fin: '19:10' },
+  { modulo: 14, inicio: '19:10', fin: '20:00' }
+];
+const RECESOS = [{ inicio: '09:30', fin: '10:00', label: '9:30–10:00' }, { inicio: '16:10', fin: '16:40', label: '4:10–4:40' }];
+function estadoHorarioActual() {
+  const ahora = new Date();
+  const diaIdx = ahora.getDay();
+  if (diaIdx === 0 || diaIdx === 6) return { estado: 'fuera' };
+  const dia = DIAS_SEMANA[diaIdx - 1];
+  const hhmm = String(ahora.getHours()).padStart(2, '0') + ':' + String(ahora.getMinutes()).padStart(2, '0');
+  const mod = MODULOS.find(m => hhmm >= m.inicio && hhmm < m.fin);
+  if (mod) return { estado: 'clase', dia, modulo: mod.modulo, horaTxt: `${mod.inicio}–${mod.fin}` };
+  const receso = RECESOS.find(r => hhmm >= r.inicio && hhmm < r.fin);
+  if (receso) return { estado: 'receso', dia, horaTxt: receso.label };
+  return { estado: 'fuera', dia };
+}
+function tarjetaHorarioActual() {
+  const info = estadoHorarioActual();
+  if (info.estado === 'receso') return `<div class="card-flat muted" style="text-align:center;">☕ Receso (${info.horaTxt})</div>`;
+  if (info.estado !== 'clase') return '';
+  const entry = Store.merged('Horario').find(h => h.dia === info.dia && Number(h.modulo) === info.modulo);
+  if (!entry) return '';
+  if (entry.tipo === 'muerta') return `<div class="card-flat" style="text-align:center;">Módulo ${info.modulo} (${info.horaTxt}) · Hora muerta</div>`;
+  if (entry.tipo === 'apoyo') return `<div class="card-flat" style="text-align:center;">Módulo ${info.modulo} (${info.horaTxt}) · Hora de apoyo</div>`;
+  const grupo = Store.data.Grupos.find(g => g.id === entry.grupoId);
+  if (!grupo) return '';
+  return `<div class="card" style="border-color:var(--accent);">
+    <div class="row between">
+      <div><div class="muted">Ahora · Módulo ${info.modulo} (${info.horaTxt})</div><strong>${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}</strong></div>
+      <button class="btn small" onclick="ctx.grupoId='${grupo.id}'; goTo('asistencia')">Ir a Asistencia</button>
+    </div>
+  </div>`;
+}
 
 /* ---------------------------------------------------------------
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [] },
 
   load() {
     try {
@@ -169,6 +216,11 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el diagnóstico');
     }
     Store.queue.Diagnosticos = [];
+    for (const h of Store.queue.Horario) {
+      const res = await jsonp('saveHorario', { data: JSON.stringify(h) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el horario');
+    }
+    Store.queue.Horario = [];
     Store.persist();
     toast('Sincronizado ✓');
     await refreshFromServer();
@@ -191,6 +243,8 @@ function updateSyncDot() {
 window.addEventListener('online', syncPending);
 window.addEventListener('offline', updateSyncDot);
 setInterval(syncPending, 30000);
+// Refresca la tarjeta de "módulo actual" cada minuto si estamos en el panorama general
+setInterval(() => { if (currentView === 'dashboard' && !ctx.grupoId) renderCurrentView(); }, 60000);
 
 /* ---------------------------------------------------------------
    UI helpers
@@ -304,6 +358,7 @@ function viewDashboard() {
   grupos.forEach(g => { ensureResumenAsistencia(g.id); alumnosEnRiesgo(g.id).forEach(x => riesgoTotal.push({ ...x, grupo: g })); });
   riesgoTotal.sort((a, b) => b.racha - a.racha);
   return `
+    ${tarjetaHorarioActual()}
     <div class="card"><div class="row between"><div><div class="muted">Grupos activos</div><h2>${grupos.length}</h2></div>
       <div><div class="muted">Alumnos</div><h2>${totalAlumnos}</h2></div>
       <div><div class="muted">Por sincronizar</div><h2 style="color:${pend ? 'var(--warn)' : 'var(--ok)'}">${pend}</h2></div></div></div>
