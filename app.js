@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v29'
+  APP_VERSION: 'v30'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -560,10 +560,10 @@ function viewAsistenciaLista() {
         <button class="btn small" onclick="marcarTodosPresente()">Todos presentes</button>
       </div>
     </div>
+    <p class="muted" style="text-align:center; font-size:.78rem; margin-bottom:8px;">Cada marca se guarda al instante, no hace falta botón de guardar</p>
     <div id="rosterList">
       ${alumnos.map(a => rosterRow(a, existentes[a.id])).join('')}
     </div>
-    <button class="btn block" style="margin-top:14px;" onclick="guardarAsistencia()">${Object.keys(existentes).length ? 'Guardar cambios' : 'Guardar pase de lista'}</button>
   `;
 }
 function viewAsistenciaGrid() {
@@ -710,31 +710,29 @@ function verResumenAsistencia() {
 function setEstatus(alumnoId, estatus, btn) {
   btn.parentElement.querySelectorAll('.stat').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
+  const item = btn.closest('.roster-item');
+  guardarUnaAsistencia(alumnoId, estatus, item);
 }
 function marcarTodosPresente() {
   document.querySelectorAll('#rosterList .roster-item').forEach(item => {
     const btn = item.querySelector('.stat[data-s="Presente"]');
     item.querySelectorAll('.stat').forEach(b => b.classList.remove('on'));
     btn.classList.add('on');
+    guardarUnaAsistencia(item.dataset.alumno, 'Presente', item);
   });
+  toast('Asistencia guardada');
 }
-function guardarAsistencia() {
-  const rows = [];
-  document.querySelectorAll('#rosterList .roster-item').forEach(item => {
-    const on = item.querySelector('.stat.on');
-    if (!on) return;
-    const registroId = item.dataset.registro;
-    rows.push({
-      id: registroId || uid(), alumnoId: item.dataset.alumno, grupoId: ctx.grupoId,
-      fecha: ctx.fecha, estatus: on.dataset.s, observacion: ''
-    });
-  });
-  if (rows.length === 0) { toast('Marca al menos un alumno'); return; }
-  rows.forEach(r => { Store.upsertLocal('Asistencia', r); Store.enqueue('Asistencia', r); });
+function guardarUnaAsistencia(alumnoId, estatus, item) {
+  const registroId = item ? item.dataset.registro : '';
+  const row = {
+    id: registroId || uid(), alumnoId, grupoId: ctx.grupoId,
+    fecha: ctx.fecha, estatus, observacion: ''
+  };
+  Store.upsertLocal('Asistencia', row);
+  Store.enqueue('Asistencia', row);
   Store.persist();
-  toast('Asistencia guardada (' + rows.length + ')');
   syncPending();
-  renderCurrentView();
+  if (item) item.dataset.registro = row.id; // para que la siguiente edición actualice, no duplique
 }
 
 /* ================================================================
