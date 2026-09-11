@@ -11,10 +11,11 @@ function viewAdmin() {
     { id: 'perfil', label: 'Perfil' },
     { id: 'encuadres', label: 'Encuadres' },
     { id: 'diagnostico', label: 'Diagnóstico' },
+    { id: 'horario', label: 'Horario' },
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -458,6 +459,64 @@ function guardarDiagnostico(input) {
   Store.persist();
   syncPending();
   item.dataset.reg = row.id;
+  toast('Guardado');
+}
+
+/* ---------------- HORARIO SEMANAL ---------------- */
+function adminHorario() {
+  const grupos = Store.activeGrupos();
+  const horario = Store.merged('Horario');
+  const cellVal = (dia, modulo) => horario.find(h => h.dia === dia && Number(h.modulo) === modulo);
+  return `
+    <div class="card">
+      <h3>Horario semanal</h3>
+      <p class="muted">Configura qué grupo (o "Hora muerta"/"Hora de apoyo") va en cada módulo. Con esto la app te sugiere solo el grupo correcto en Inicio, según la hora.</p>
+      <div style="overflow-x:auto;">
+      <table style="min-width:720px;">
+        <thead><tr>
+          <th style="min-width:100px;">Módulo</th>
+          ${DIAS_SEMANA.map(d => `<th style="min-width:130px;">${d}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${MODULOS.map(m => `<tr>
+            <td><strong>M${m.modulo}</strong><br><span class="muted" style="font-size:.72rem;">${m.inicio}–${m.fin}</span></td>
+            ${DIAS_SEMANA.map(d => {
+              const c = cellVal(d, m.modulo);
+              return `<td><select data-dia="${d}" data-modulo="${m.modulo}" data-reg="${c ? c.id : ''}" onchange="guardarHorarioCelda(this)" style="width:100%; padding:5px; border:1px solid var(--line); border-radius:6px; font-size:.78rem;">
+                <option value="">—</option>
+                <option value="__muerta__" ${c && c.tipo === 'muerta' ? 'selected' : ''}>Hora muerta</option>
+                <option value="__apoyo__" ${c && c.tipo === 'apoyo' ? 'selected' : ''}>Hora de apoyo</option>
+                ${grupos.map(g => `<option value="${g.id}" ${c && c.grupoId === g.id ? 'selected' : ''}>${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
+              </select></td>`;
+            }).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+}
+function guardarHorarioCelda(sel) {
+  const dia = sel.dataset.dia, modulo = Number(sel.dataset.modulo), regId = sel.dataset.reg;
+  const val = sel.value;
+  if (val === '') {
+    if (regId) {
+      Store.data.Horario = Store.data.Horario.filter(h => h.id !== regId);
+      Store.queue.Horario = Store.queue.Horario.filter(h => h.id !== regId);
+      Store.persist();
+      jsonp('deleteHorario', { id: regId }).catch(() => {});
+      sel.dataset.reg = '';
+    }
+    return;
+  }
+  let tipo = 'grupo', grupoId = val;
+  if (val === '__muerta__') { tipo = 'muerta'; grupoId = ''; }
+  else if (val === '__apoyo__') { tipo = 'apoyo'; grupoId = ''; }
+  const row = { id: regId || uid(), dia, modulo, grupoId, tipo };
+  Store.upsertLocal('Horario', row);
+  Store.enqueue('Horario', row);
+  Store.persist();
+  syncPending();
+  sel.dataset.reg = row.id;
   toast('Guardado');
 }
 
