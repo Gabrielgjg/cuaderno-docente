@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v30'
+  APP_VERSION: 'v31'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -742,7 +742,7 @@ let califVista = 'grid';
 function abrevRubro(rubro) { return (rubro || '').trim().slice(0, 2).toUpperCase(); }
 function actividadesDe(grupo) {
   return Store.merged('Actividades')
-    .filter(x => x.asignatura === grupo.asignatura && x.trimestre === ctx.trimestre && x.activo !== false)
+    .filter(x => x.grupoId === grupo.id && x.asignatura === grupo.asignatura && x.trimestre === ctx.trimestre && x.activo !== false)
     .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
 }
 function viewCalificaciones() {
