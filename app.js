@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v31'
+  APP_VERSION: 'v33'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -157,6 +157,16 @@ function jsonp(action, params = {}) {
    SINCRONIZACIÓN
    --------------------------------------------------------------- */
 let syncing = false;
+let _renderSafeTimer = null;
+function renderCurrentViewSafe(delay) {
+  clearTimeout(_renderSafeTimer);
+  _renderSafeTimer = setTimeout(() => {
+    const activo = document.activeElement;
+    const enCampo = activo && ['INPUT', 'SELECT', 'TEXTAREA'].includes(activo.tagName);
+    if (enCampo) { renderCurrentViewSafe(800); return; } // sigues escribiendo: espera y reintenta
+    renderCurrentView();
+  }, delay || 150);
+}
 async function refreshFromServer() {
   try {
     const res = await jsonp('getAll');
@@ -164,7 +174,7 @@ async function refreshFromServer() {
       Store.data = res.data;
       Store.persist();
       toast('Datos actualizados');
-      renderCurrentView();
+      renderCurrentViewSafe();
     }
   } catch (e) { /* seguimos con lo local */ }
 }
@@ -244,7 +254,7 @@ window.addEventListener('online', syncPending);
 window.addEventListener('offline', updateSyncDot);
 setInterval(syncPending, 30000);
 // Refresca la tarjeta de "módulo actual" cada minuto si estamos en el panorama general
-setInterval(() => { if (currentView === 'dashboard' && !ctx.grupoId) renderCurrentView(); }, 60000);
+setInterval(() => { if (currentView === 'dashboard' && !ctx.grupoId) renderCurrentViewSafe(); }, 60000);
 
 /* ---------------------------------------------------------------
    UI helpers
@@ -645,8 +655,7 @@ let resumenAsistenciaCache = {};
 let resumenAsistenciaCargando = {};
 let _renderDebounceTimer = null;
 function renderCurrentViewDebounced() {
-  clearTimeout(_renderDebounceTimer);
-  _renderDebounceTimer = setTimeout(() => renderCurrentView(), 150);
+  renderCurrentViewSafe();
 }
 function ensureResumenAsistencia(grupoId) {
   if (!grupoId || resumenAsistenciaCache[grupoId] || resumenAsistenciaCargando[grupoId]) return;
@@ -872,9 +881,19 @@ function guardarEdicionActividad(id) {
   });
   Store.upsertLocal('Actividades', row);
   Store.enqueue('Actividades', row);
+
+  // Arrastra el rubro/nombre/fecha nuevos a las calificaciones ya capturadas de esta actividad,
+  // para que el cálculo del promedio siempre refleje el rubro actual, no el que tenía al capturarse.
+  const relacionadas = Store.merged('Calificaciones').filter(c => c.actividadId === id);
+  relacionadas.forEach(c => {
+    const actualizado = Object.assign({}, c, { rubro: row.rubro, evidencia: row.nombre, fecha: row.fecha });
+    Store.upsertLocal('Calificaciones', actualizado);
+    Store.enqueue('Calificaciones', actualizado);
+  });
+
   Store.persist();
   closeModal();
-  toast('Actividad actualizada');
+  toast('Actividad actualizada' + (relacionadas.length ? ` (${relacionadas.length} calificación(es) recalculada(s))` : ''));
   syncPending();
   renderCurrentView();
 }
