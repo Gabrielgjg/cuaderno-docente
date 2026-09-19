@@ -1,16 +1,17 @@
-const CACHE = 'cuaderno-docente-v33';
+const CACHE = 'cuaderno-docente-v34';
 const SHELL = ['./', './index.html', './app.js', './admin.js', './classroom.js', './chart.umd.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE).then(async (c) => {
-      // Se fuerza {cache:'reload'} para ignorar la caché HTTP del navegador
-      // y traer siempre bytes frescos del servidor al actualizar versión.
+      // Si CUALQUIER archivo falla al descargarse, se aborta toda la instalación
+      // (en vez de ignorar el error y quedarse con una copia a medias). Así el
+      // navegador conserva la versión anterior, completa y funcional, hasta que
+      // la nueva logre instalarse entera.
       await Promise.all(SHELL.map(async (url) => {
-        try {
-          const res = await fetch(url, { cache: 'reload' });
-          if (res.ok) await c.put(url, res);
-        } catch (err) { /* si un archivo falla no se detiene toda la instalación */ }
+        const res = await fetch(url, { cache: 'reload' });
+        if (!res.ok) throw new Error('No se pudo obtener ' + url);
+        await c.put(url, res);
       }));
     })
   );
