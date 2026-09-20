@@ -70,7 +70,7 @@ function guardarGrupo(id) {
   Store.persist();
   closeModal();
   toast('Grupo guardado');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 
@@ -142,7 +142,7 @@ function guardarAlumno(id) {
   Store.persist();
   closeModal();
   toast('Alumno guardado');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 function modalMigrar(alumnoId) {
@@ -170,7 +170,7 @@ function migrarAlumnoUI(alumnoId) {
   }
   closeModal();
   toast('Alumno migrado');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 function confirmarBaja(alumnoId) {
@@ -457,7 +457,7 @@ function guardarDiagnostico(input) {
   Store.upsertLocal('Diagnosticos', row);
   Store.enqueue('Diagnosticos', row);
   Store.persist();
-  syncPending();
+  scheduleSyncPending();
   item.dataset.reg = row.id;
   toast('Guardado');
 }
@@ -515,7 +515,7 @@ function guardarHorarioCelda(sel) {
   Store.upsertLocal('Horario', row);
   Store.enqueue('Horario', row);
   Store.persist();
-  syncPending();
+  scheduleSyncPending();
   sel.dataset.reg = row.id;
   toast('Guardado');
 }
@@ -644,7 +644,7 @@ function confirmarImportacion(grupoId) {
   Store.persist();
   closeModal();
   toast(rows.length + ' alumnos agregados');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 
