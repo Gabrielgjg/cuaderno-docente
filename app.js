@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v36'
+  APP_VERSION: 'v37'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -661,17 +661,26 @@ function contarAsistencia(alumnoId, grupoId) {
 }
 let resumenAsistenciaCache = {};
 let resumenAsistenciaCargando = {};
+let resumenAsistenciaUltimoIntento = {};
 let _renderDebounceTimer = null;
 function renderCurrentViewDebounced() {
   renderCurrentViewSafe();
 }
 function ensureResumenAsistencia(grupoId) {
   if (!grupoId || resumenAsistenciaCache[grupoId] || resumenAsistenciaCargando[grupoId]) return;
+  const ahora = Date.now();
+  // Si el último intento falló hace menos de un minuto, no reintentes todavía
+  // (evita el bucle de reintentos infinitos cuando no hay internet).
+  if (resumenAsistenciaUltimoIntento[grupoId] && (ahora - resumenAsistenciaUltimoIntento[grupoId]) < 60000) return;
+  resumenAsistenciaUltimoIntento[grupoId] = ahora;
   resumenAsistenciaCargando[grupoId] = true;
   jsonp('getResumenAsistencia', { grupoId })
-    .then(res => { if (res && res.ok) resumenAsistenciaCache[grupoId] = res.data; })
-    .catch(() => {})
-    .finally(() => { resumenAsistenciaCargando[grupoId] = false; renderCurrentViewDebounced(); });
+    .then(res => {
+      resumenAsistenciaCargando[grupoId] = false;
+      if (res && res.ok) { resumenAsistenciaCache[grupoId] = res.data; renderCurrentViewDebounced(); }
+      // si no vino ok, no repintamos — nada nuevo que mostrar, y evita el bucle
+    })
+    .catch(() => { resumenAsistenciaCargando[grupoId] = false; /* sin repintar */ });
 }
 function rachaFaltasConsecutivas(alumnoId, grupoId) {
   const cache = resumenAsistenciaCache[grupoId];
