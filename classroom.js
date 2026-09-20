@@ -208,3 +208,20 @@ function lanzarDados() {
   document.getElementById('dadosResultado').innerHTML = html;
   document.getElementById('dadoSuma').textContent = 'Suma total: ' + suma;
 }
+
+/* ---------------------------------------------------------------
+   ARRANQUE — vive aquí (el último script en cargar) a propósito:
+   así garantizamos que app.js, admin.js y classroom.js ya estén
+   TODOS cargados y definidos antes de pintar la primera pantalla,
+   en vez de confiar en que la red los traiga lo bastante rápido.
+   --------------------------------------------------------------- */
+renderNav();
+renderCurrentView();
+updateSyncDot();
+if (navigator.onLine) refreshFromServer();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
