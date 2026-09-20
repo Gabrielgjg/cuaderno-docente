@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v34'
+  APP_VERSION: 'v35'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -1207,15 +1207,7 @@ function guardarIncidencia(alumnoId, grupoId) {
    ================================================================ */
 
 /* ---------------------------------------------------------------
-   ARRANQUE
+   (el arranque real se movió al final de classroom.js, para
+   garantizar que los tres archivos ya estén cargados antes de
+   pintar la primera pantalla — ver nota ahí)
    --------------------------------------------------------------- */
-renderNav();
-renderCurrentView();
-updateSyncDot();
-if (navigator.onLine) refreshFromServer();
-
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  });
-}
