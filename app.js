@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v35'
+  APP_VERSION: 'v36'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -253,6 +253,14 @@ function updateSyncDot() {
 window.addEventListener('online', syncPending);
 window.addEventListener('offline', updateSyncDot);
 setInterval(syncPending, 30000);
+let _syncDebounceTimer = null;
+function scheduleSyncPending() {
+  // Agrupa varias capturas seguidas en una sola sincronización, en vez de
+  // perseguir cada toque individual — evita que la pantalla repinte de más
+  // mientras estás capturando rápido (ej. pase de lista completo).
+  clearTimeout(_syncDebounceTimer);
+  _syncDebounceTimer = setTimeout(() => syncPending(), 1500);
+}
 // Refresca la tarjeta de "módulo actual" cada minuto si estamos en el panorama general
 setInterval(() => { if (currentView === 'dashboard' && !ctx.grupoId) renderCurrentViewSafe(); }, 60000);
 
@@ -633,7 +641,7 @@ function ciclarAsistenciaCelda(alumnoId, fecha, el) {
   Store.upsertLocal('Asistencia', row);
   Store.enqueue('Asistencia', row);
   Store.persist();
-  syncPending();
+  scheduleSyncPending();
   el.textContent = nuevoEstatus[0];
   el.classList.add('on');
   el.dataset.s = nuevoEstatus;
@@ -740,7 +748,7 @@ function guardarUnaAsistencia(alumnoId, estatus, item) {
   Store.upsertLocal('Asistencia', row);
   Store.enqueue('Asistencia', row);
   Store.persist();
-  syncPending();
+  scheduleSyncPending();
   if (item) item.dataset.registro = row.id; // para que la siguiente edición actualice, no duplique
 }
 
@@ -848,7 +856,7 @@ function crearActividad() {
   Store.enqueue('Actividades', row);
   Store.persist();
   toast('Actividad agregada');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 function editarActividad(id) {
@@ -894,7 +902,7 @@ function guardarEdicionActividad(id) {
   Store.persist();
   closeModal();
   toast('Actividad actualizada' + (relacionadas.length ? ` (${relacionadas.length} calificación(es) recalculada(s))` : ''));
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 function confirmarEliminarActividad(id) {
@@ -957,7 +965,7 @@ function guardarCeldaCalificacion(input) {
   Store.upsertLocal('Calificaciones', row);
   Store.enqueue('Calificaciones', row);
   Store.persist();
-  syncPending();
+  scheduleSyncPending();
   input.dataset.reg = row.id; // para que la siguiente edición actualice, no duplique
   actualizarPromedioAlumno(alumnoId, grupo);
 }
@@ -1039,7 +1047,7 @@ function guardarEdicionEvidencia(id) {
   Store.persist();
   closeModal();
   toast('Evidencia actualizada');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 async function borrarEvidencia(id, alumnoId, rubro) {
@@ -1074,7 +1082,7 @@ function guardarEvidencia(alumnoId, rubro, asignatura) {
   Store.persist();
   closeModal();
   toast('Evidencia guardada');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 
@@ -1136,7 +1144,7 @@ function guardarEdicionDiario(id) {
   Store.persist();
   closeModal();
   toast('Entrada actualizada');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 function confirmarEliminarDiario(id) {
@@ -1171,7 +1179,7 @@ function guardarDiario() {
   Store.enqueue('Diario', row);
   Store.persist();
   toast('Guardado en el diario');
-  syncPending();
+  scheduleSyncPending();
   renderCurrentView();
 }
 
@@ -1199,7 +1207,7 @@ function guardarIncidencia(alumnoId, grupoId) {
   Store.persist();
   closeModal();
   toast('Incidencia registrada');
-  syncPending();
+  scheduleSyncPending();
 }
 
 /* ================================================================
