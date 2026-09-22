@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v37'
+  APP_VERSION: 'v38'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -451,6 +451,12 @@ function viewDashboardGrupo() {
     <div class="card chart-box"><canvas id="chartAsistenciaGrupo"></canvas></div>
     <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
     <div class="card chart-box"><canvas id="chartEntregas"></canvas></div>
+    <h3>Distribución de calificaciones por rubro — ${esc(ctx.trimestre)}</h3>
+    ${rubros.length === 0 ? '<p class="muted">No hay encuadre configurado para esta materia/trimestre.</p>' :
+      rubros.map((r, i) => `
+        <p class="muted" style="margin:10px 0 4px;">${esc(r.rubro)} (${r.porcentaje}%)</p>
+        <div class="card chart-box" style="height:190px;"><canvas id="chartRubroDist-${i}"></canvas></div>
+      `).join('')}
     <h3>Distribución de calificaciones — ${esc(ctx.trimestre)}</h3>
     <div class="card chart-box"><canvas id="chartDistribucion"></canvas></div>
   `;
@@ -512,7 +518,23 @@ function renderDashboardCharts() {
     });
   }
 
-  // 3. Distribución de calificaciones (aprobado/reprobado/sin calificar)
+  // 3. Distribución de calificaciones por rubro (cuántos 10, 9, 8...)
+  const calRowsTrimestre = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const buckets = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+  rubros.forEach((r, i) => {
+    const elR = document.getElementById(`chartRubroDist-${i}`);
+    if (!elR) return;
+    destroyChart(`chartRubroDist-${i}`);
+    const valores = calRowsTrimestre.filter(c => c.rubro === r.rubro).map(c => Math.round(Number(c.valor)));
+    const counts = buckets.map(b => valores.filter(v => v === b).length);
+    chartInstances[`chartRubroDist-${i}`] = new Chart(elR, {
+      type: 'bar',
+      data: { labels: buckets.map(String), datasets: [{ label: r.rubro, data: counts, backgroundColor: CHART_COLORS.accent }] },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
+    });
+  });
+
+  // 4. Distribución de calificaciones (aprobado/reprobado/sin calificar)
   const elD = document.getElementById('chartDistribucion');
   if (elD) {
     destroyChart('chartDistribucion');
