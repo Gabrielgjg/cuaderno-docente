@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v38'
+  APP_VERSION: 'v39'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -75,8 +75,13 @@ function tarjetaHorarioActual() {
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] },
+  // Estructura vacía completa: se usa al recibir datos del servidor, para que una
+  // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
+  emptyData() {
+    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] };
+  },
 
   load() {
     try {
@@ -97,6 +102,7 @@ const Store = {
 
   upsertLocal(sheet, obj) {
     if (!obj.id) obj.id = 'local_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    if (!this.data[sheet]) this.data[sheet] = [];
     const arr = this.data[sheet];
     const idx = arr.findIndex(r => r.id === obj.id);
     if (idx >= 0) arr[idx] = { ...arr[idx], ...obj }; else arr.push(obj);
@@ -104,6 +110,7 @@ const Store = {
   },
 
   enqueue(sheet, obj) {
+    if (!this.queue[sheet]) this.queue[sheet] = [];
     this.queue[sheet].push(obj);
     this.persist();
   },
@@ -118,8 +125,8 @@ const Store = {
   // así que se combina por id (la versión de la cola, más reciente, gana).
   merged(sheet) {
     const map = new Map();
-    this.data[sheet].forEach(r => map.set(r.id, r));
-    this.queue[sheet].forEach(r => map.set(r.id, r));
+    (this.data[sheet] || []).forEach(r => map.set(r.id, r));
+    (this.queue[sheet] || []).forEach(r => map.set(r.id, r));
     return Array.from(map.values());
   }
 };
@@ -171,7 +178,7 @@ async function refreshFromServer() {
   try {
     const res = await jsonp('getAll');
     if (res && res.ok) {
-      Store.data = res.data;
+      Store.data = Object.assign({}, Store.emptyData(), res.data);
       Store.persist();
       toast('Datos actualizados');
       renderCurrentViewSafe();
@@ -231,6 +238,22 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el horario');
     }
     Store.queue.Horario = [];
+    // Proyectos: en orden (proyecto → equipos → sesiones → notas). Cada elemento se
+    // quita de la cola solo cuando el servidor confirma, para no perder nada si se corta.
+    const tablasProyecto = [
+      { hoja: 'Proyectos', accion: 'saveProyecto', txt: 'el proyecto' },
+      { hoja: 'ProyectoEquipos', accion: 'saveProyectoEquipo', txt: 'el equipo' },
+      { hoja: 'ProyectoSesiones', accion: 'saveProyectoSesion', txt: 'la sesión' },
+      { hoja: 'ProyectoNotas', accion: 'saveProyectoNota', txt: 'la nota' }
+    ];
+    for (const t of tablasProyecto) {
+      const pendientes = (Store.queue[t.hoja] || []).slice();
+      for (const item of pendientes) {
+        const res = await jsonp(t.accion, { data: JSON.stringify(item) });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó ' + t.txt);
+        Store.queue[t.hoja] = Store.queue[t.hoja].filter(x => x !== item);
+      }
+    }
     Store.persist();
     toast('Sincronizado ✓');
     await refreshFromServer();
@@ -798,17 +821,22 @@ function viewCalificaciones() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
+  const chips = `
+    <div class="chip-list">
+      <span class="chip ${califVista === 'grid' ? 'active' : ''}" onclick="califVista='grid'; renderCurrentView();">Cuadrícula</span>
+      <span class="chip ${califVista === 'alumno' ? 'active' : ''}" onclick="califVista='alumno'; renderCurrentView();">Por alumno</span>
+      <span class="chip ${califVista === 'proyectos' ? 'active' : ''}" onclick="califVista='proyectos'; renderCurrentView();">Proyectos</span>
+    </div>`;
+  // Proyectos no depende del encuadre: se muestra aunque aún no esté configurado
+  if (califVista === 'proyectos') return chips + califVistaProyectos(grupo);
   if (rubros.length === 0) {
-    return `<div class="empty"><p class="muted">No hay encuadre configurado para <strong>${esc(grupo.asignatura)}</strong> en ${esc(ctx.trimestre)}.</p>
+    return chips + `<div class="empty"><p class="muted">No hay encuadre configurado para <strong>${esc(grupo.asignatura)}</strong> en ${esc(ctx.trimestre)}.</p>
       <button class="btn" onclick="goTo('admin')">Configurar encuadre</button></div>`;
   }
   return `
     <div class="card-flat muted">Encuadre de <strong>${esc(grupo.asignatura)}</strong>: ${rubros.map(r => `${esc(r.rubro)} (${r.porcentaje}%)`).join(' · ')}</div>
-    <div class="chip-list">
-      <span class="chip ${califVista === 'grid' ? 'active' : ''}" onclick="califVista='grid'; renderCurrentView();">Cuadrícula</span>
-      <span class="chip ${califVista === 'alumno' ? 'active' : ''}" onclick="califVista='alumno'; renderCurrentView();">Por alumno</span>
-    </div>
-    ${califVista === 'grid' ? califVistaGrid(grupo, rubros) : califVistaAlumno(grupo, rubros)}
+    ${chips}
+    ${califVista === 'alumno' ? califVistaAlumno(grupo, rubros) : califVistaGrid(grupo, rubros)}
   `;
 }
 function califVistaAlumno(grupo, rubros) {
@@ -1115,6 +1143,365 @@ function guardarEvidencia(alumnoId, rubro, asignatura) {
   toast('Evidencia guardada');
   scheduleSyncPending();
   renderCurrentView();
+}
+
+/* ================================================================
+   PROYECTOS — seguimiento formativo por equipo y por sesión
+   (vive como tercera vista dentro de Calificaciones)
+   ================================================================ */
+let proyectoSelId = null;      // proyecto seleccionado
+let proyEquipoCerrado = {};    // { equipoId: true } → equipos con sus integrantes plegados
+
+function proyOk(x) { return x.activo !== false && x.activo !== 'FALSE'; }
+function proyectosDeGrupo() {
+  return Store.merged('Proyectos')
+    .filter(p => p.grupoId === ctx.grupoId && p.trimestre === ctx.trimestre && proyOk(p))
+    .sort((a, b) => String(a.creado || '').localeCompare(String(b.creado || '')));
+}
+function porOrden(a, b) { return Number(a.orden || 0) - Number(b.orden || 0); }
+function equiposDe(proyectoId) { return Store.merged('ProyectoEquipos').filter(e => e.proyectoId === proyectoId).sort(porOrden); }
+function sesionesDe(proyectoId) { return Store.merged('ProyectoSesiones').filter(s => s.proyectoId === proyectoId).sort(porOrden); }
+function notasDeProyecto(proyectoId) { return Store.merged('ProyectoNotas').filter(n => n.proyectoId === proyectoId); }
+function integrantesDe(equipo) {
+  try { const a = JSON.parse(equipo.integrantes || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function nombreAlumno(id) {
+  const a = Store.data.Alumnos.find(x => x.id === id);
+  if (!a) return 'Alumno (no encontrado)';
+  return a.nombre + ((a.activo === false || a.activo === 'FALSE') ? ' (baja)' : '');
+}
+// Alumnos del grupo que todavía no están en ningún equipo de este proyecto
+function alumnosSinEquipo(proyectoId) {
+  const usados = new Set();
+  equiposDe(proyectoId).forEach(e => integrantesDe(e).forEach(id => usados.add(id)));
+  return Store.alumnosDeGrupo(ctx.grupoId).filter(a => !usados.has(a.id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+function previewNota(t) {
+  const x = String(t || '').replace(/\s+/g, ' ').trim();
+  return x.length > 70 ? x.slice(0, 70) + '…' : x;
+}
+function guardarFilaProyecto(hoja, row) {
+  Store.upsertLocal(hoja, row);
+  Store.enqueue(hoja, row);
+  Store.persist();
+  scheduleSyncPending();
+}
+function quitarLocal(hoja, pred) {
+  Store.data[hoja] = (Store.data[hoja] || []).filter(r => !pred(r));
+  Store.queue[hoja] = (Store.queue[hoja] || []).filter(r => !pred(r));
+}
+async function borrarRemoto(accion, ids) {
+  for (const id of ids) { try { await jsonp(accion, { id }); } catch (e) { /* se puede reintentar luego */ } }
+}
+
+function califVistaProyectos(grupo) {
+  const proyectos = proyectosDeGrupo();
+  if (!proyectoSelId || !proyectos.find(p => p.id === proyectoSelId)) proyectoSelId = proyectos.length ? proyectos[0].id : null;
+  const selStyle = 'flex:1; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised);';
+  const barra = `
+    <div class="row" style="margin-bottom:10px;">
+      ${proyectos.length ? `
+        <select style="${selStyle}" onchange="proyectoSelId=this.value; renderCurrentView();">
+          ${proyectos.map(p => `<option value="${p.id}" ${p.id === proyectoSelId ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}
+        </select>
+        <button class="btn small ghost" title="Renombrar o eliminar" onclick="modalProyecto('${proyectoSelId}')">✎</button>` : ''}
+      <button class="btn small secondary" onclick="modalProyecto()">+ Nuevo proyecto</button>
+    </div>`;
+  if (!proyectoSelId) {
+    return barra + `<div class="empty"><p class="muted">Aún no hay proyectos para este grupo en ${esc(ctx.trimestre)}.<br>Crea el primero con “+ Nuevo proyecto”.</p></div>`;
+  }
+  const p = proyectos.find(x => x.id === proyectoSelId);
+  const equipos = equiposDe(p.id);
+  const sesiones = sesionesDe(p.id);
+  const notas = notasDeProyecto(p.id);
+  const sinEquipo = alumnosSinEquipo(p.id);
+  const notaDe = (eId, sId) => notas.find(n => n.equipoId === eId && n.sesionId === sId);
+
+  const resumenSin = sinEquipo.length === 0
+    ? `<div class="card-flat muted" style="margin-bottom:10px;">Todos los alumnos del grupo ya tienen equipo ✓</div>`
+    : `<details class="card-flat" style="margin-bottom:10px;">
+         <summary class="muted" style="cursor:pointer;">Alumnos sin equipo: <strong>${sinEquipo.length}</strong></summary>
+         <div class="muted" style="font-size:.8rem; margin-top:6px;">${sinEquipo.map(a => esc(a.nombre)).join(' · ')}</div>
+       </details>`;
+
+  const filasEquipo = equipos.map(e => {
+    const cerrado = !!proyEquipoCerrado[e.id];
+    const ints = integrantesDe(e);
+    return `<tr>
+      <td style="position:sticky; left:0; background:var(--paper-raised); vertical-align:top; min-width:170px; max-width:210px;">
+        <div class="row" style="gap:4px;">
+          <button class="btn small ghost" style="padding:2px 8px;" title="Plegar / desplegar integrantes" onclick="toggleEquipo('${e.id}')">${cerrado ? '▸' : '▾'}</button>
+          <strong style="cursor:pointer;" onclick="modalEquipo('${e.id}')">${esc(e.nombre)} ✎</strong>
+        </div>
+        <div class="muted" style="font-size:.72rem;">${ints.length} integrante(s)</div>
+        ${cerrado ? '' : `
+          <div style="margin-top:6px; font-size:.8rem;">
+            ${ints.map(id => `<div class="row between" style="gap:6px; padding:2px 0;">
+              <span>${esc(nombreAlumno(id))}</span>
+              <span style="cursor:pointer; color:var(--danger);" title="Quitar del equipo" onclick="quitarIntegrante('${e.id}','${id}')">✕</span>
+            </div>`).join('')}
+            <button class="btn small secondary" style="margin-top:4px;" onclick="modalIntegrantes('${e.id}')">+ Integrantes</button>
+          </div>`}
+      </td>
+      ${sesiones.map(s => {
+        const n = notaDe(e.id, s.id);
+        return `<td style="vertical-align:top; cursor:pointer; font-size:.8rem; ${n ? '' : 'color:var(--ink-soft);'}" onclick="modalNota('${e.id}','${s.id}')">${n ? esc(previewNota(n.texto)) : '＋ nota'}</td>`;
+      }).join('')}
+      <td></td>
+    </tr>`;
+  }).join('');
+
+  return barra + resumenSin + `
+    <div style="overflow-x:auto;">
+    <table style="min-width:${190 + sesiones.length * 150 + 120}px;">
+      <thead><tr>
+        <th style="position:sticky; left:0; background:var(--paper); min-width:170px;">Equipo</th>
+        ${sesiones.map(s => `<th style="min-width:140px; cursor:pointer;" title="Editar sesión" onclick="modalSesion('${p.id}','${s.id}')">${esc(s.nombre)} ✎<br><span style="font-weight:400; font-size:.68rem;">${esc(s.fecha || '')}</span></th>`).join('')}
+        <th style="min-width:110px;"><button class="btn small secondary" onclick="modalSesion('${p.id}')">+ Sesión</button></th>
+      </tr></thead>
+      <tbody>
+        ${filasEquipo}
+        <tr><td colspan="${sesiones.length + 2}"><button class="btn small secondary" onclick="agregarEquipo('${p.id}')">+ Agregar equipo</button></td></tr>
+      </tbody>
+    </table>
+    </div>
+    ${equipos.length === 0 ? '<p class="muted" style="text-align:center; margin-top:10px;">Agrega el primer equipo, y las sesiones que necesites.</p>' : ''}
+  `;
+}
+
+function toggleEquipo(id) { proyEquipoCerrado[id] = !proyEquipoCerrado[id]; renderCurrentView(); }
+
+/* ---------- Proyecto: crear / renombrar / eliminar ---------- */
+function modalProyecto(id) {
+  const p = id ? Store.merged('Proyectos').find(x => x.id === id) : null;
+  const sugerido = 'Proyecto ' + (proyectosDeGrupo().length + 1);
+  openModal(`
+    <h2>${p ? 'Editar proyecto' : 'Nuevo proyecto'}</h2>
+    <p class="muted">${esc(ctx.trimestre)}</p>
+    <div class="field"><label>Nombre</label><input id="proyNombre" value="${esc(p ? p.nombre : sugerido)}"></div>
+    <button class="btn block" onclick="guardarProyecto(${p ? `'${p.id}'` : 'null'})">Guardar</button>
+    ${p ? `<button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarProyecto('${p.id}')">Eliminar proyecto</button>` : ''}
+  `);
+}
+function guardarProyecto(id) {
+  const nombre = document.getElementById('proyNombre').value.trim();
+  if (!nombre) { toast('Ponle un nombre al proyecto'); return; }
+  const existente = id ? Store.merged('Proyectos').find(x => x.id === id) : null;
+  const row = existente
+    ? Object.assign({}, existente, { nombre })
+    : { id: uid(), grupoId: ctx.grupoId, trimestre: ctx.trimestre, nombre, creado: new Date().toISOString(), activo: true };
+  guardarFilaProyecto('Proyectos', row);
+  proyectoSelId = row.id;
+  closeModal();
+  toast('Proyecto guardado');
+  renderCurrentView();
+}
+function confirmarEliminarProyecto(id) {
+  const p = Store.merged('Proyectos').find(x => x.id === id);
+  const nEq = equiposDe(id).length, nSes = sesionesDe(id).length, nNotas = notasDeProyecto(id).length;
+  openModal(`
+    <h2>Eliminar proyecto</h2>
+    <p>¿Eliminar <strong>${esc(p ? p.nombre : '')}</strong>?</p>
+    <p class="muted">Se borrarán también sus ${nEq} equipo(s), ${nSes} sesión(es) y ${nNotas} nota(s). No se puede deshacer.</p>
+    <div class="row">
+      <button class="btn secondary block" onclick="closeModal()">Cancelar</button>
+      <button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarProyecto('${id}')">Eliminar</button>
+    </div>
+  `);
+}
+async function eliminarProyecto(id) {
+  const notasIds = notasDeProyecto(id).map(n => n.id);
+  const sesIds = sesionesDe(id).map(s => s.id);
+  const eqIds = equiposDe(id).map(e => e.id);
+  quitarLocal('ProyectoNotas', r => r.proyectoId === id);
+  quitarLocal('ProyectoSesiones', r => r.proyectoId === id);
+  quitarLocal('ProyectoEquipos', r => r.proyectoId === id);
+  quitarLocal('Proyectos', r => r.id === id);
+  Store.persist();
+  proyectoSelId = null;
+  closeModal();
+  toast('Proyecto eliminado');
+  renderCurrentView();
+  await borrarRemoto('deleteProyectoNota', notasIds);
+  await borrarRemoto('deleteProyectoSesion', sesIds);
+  await borrarRemoto('deleteProyectoEquipo', eqIds);
+  await borrarRemoto('deleteProyecto', [id]);
+}
+
+/* ---------- Equipos ---------- */
+function agregarEquipo(proyectoId) {
+  const equipos = equiposDe(proyectoId);
+  const orden = equipos.reduce((m, e) => Math.max(m, Number(e.orden || 0)), 0) + 1;
+  guardarFilaProyecto('ProyectoEquipos', { id: uid(), proyectoId, nombre: 'Equipo ' + (equipos.length + 1), orden, integrantes: '[]' });
+  renderCurrentView();
+}
+function modalEquipo(id) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === id);
+  if (!e) return;
+  openModal(`
+    <h2>Editar equipo</h2>
+    <div class="field"><label>Nombre</label><input id="equipoNombre" value="${esc(e.nombre)}"></div>
+    <button class="btn block" onclick="guardarEquipo('${id}')">Guardar</button>
+    <button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarEquipo('${id}')">Eliminar equipo</button>
+  `);
+}
+function guardarEquipo(id) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === id);
+  const nombre = document.getElementById('equipoNombre').value.trim();
+  if (!e || !nombre) { toast('Ponle un nombre al equipo'); return; }
+  guardarFilaProyecto('ProyectoEquipos', Object.assign({}, e, { nombre }));
+  closeModal();
+  renderCurrentView();
+}
+function confirmarEliminarEquipo(id) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === id);
+  const nNotas = Store.merged('ProyectoNotas').filter(n => n.equipoId === id).length;
+  openModal(`
+    <h2>Eliminar equipo</h2>
+    <p>¿Eliminar <strong>${esc(e ? e.nombre : '')}</strong>?</p>
+    <p class="muted">Sus integrantes vuelven a quedar disponibles y se borrarán sus ${nNotas} nota(s).</p>
+    <div class="row">
+      <button class="btn secondary block" onclick="closeModal()">Cancelar</button>
+      <button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarEquipo('${id}')">Eliminar</button>
+    </div>
+  `);
+}
+async function eliminarEquipo(id) {
+  const notasIds = Store.merged('ProyectoNotas').filter(n => n.equipoId === id).map(n => n.id);
+  quitarLocal('ProyectoNotas', r => r.equipoId === id);
+  quitarLocal('ProyectoEquipos', r => r.id === id);
+  Store.persist();
+  closeModal();
+  toast('Equipo eliminado');
+  renderCurrentView();
+  await borrarRemoto('deleteProyectoNota', notasIds);
+  await borrarRemoto('deleteProyectoEquipo', [id]);
+}
+
+/* ---------- Integrantes ---------- */
+function modalIntegrantes(equipoId) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === equipoId);
+  if (!e) return;
+  const libres = alumnosSinEquipo(e.proyectoId);
+  openModal(`
+    <h2>Integrantes · ${esc(e.nombre)}</h2>
+    <p class="muted" id="integrantesInfo">${libres.length ? `${libres.length} alumno(s) sin equipo — toca un nombre para agregarlo` : 'Todos los alumnos ya tienen equipo.'}</p>
+    <div id="integrantesLista" style="max-height:52vh; overflow-y:auto; margin-bottom:10px;">
+      ${libres.map(a => `<div class="card-flat" style="cursor:pointer;" onclick="agregarIntegrante('${equipoId}','${a.id}', this)">${esc(a.nombre)}</div>`).join('')}
+    </div>
+    <button class="btn block" onclick="closeModal()">Listo</button>
+  `);
+}
+function agregarIntegrante(equipoId, alumnoId, el) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === equipoId);
+  if (!e) return;
+  const ints = integrantesDe(e);
+  if (ints.includes(alumnoId)) return;
+  ints.push(alumnoId);
+  guardarFilaProyecto('ProyectoEquipos', Object.assign({}, e, { integrantes: JSON.stringify(ints) }));
+  if (el) el.remove();   // ya seleccionado: desaparece de la lista
+  const quedan = document.querySelectorAll('#integrantesLista .card-flat').length;
+  const info = document.getElementById('integrantesInfo');
+  if (info) info.textContent = quedan ? `${quedan} alumno(s) sin equipo — toca un nombre para agregarlo` : 'Todos los alumnos ya tienen equipo.';
+  renderCurrentView();   // actualiza la tabla que está detrás del cuadro
+}
+function quitarIntegrante(equipoId, alumnoId) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === equipoId);
+  if (!e) return;
+  const ints = integrantesDe(e).filter(id => id !== alumnoId);
+  guardarFilaProyecto('ProyectoEquipos', Object.assign({}, e, { integrantes: JSON.stringify(ints) }));
+  renderCurrentView();
+}
+
+/* ---------- Sesiones ---------- */
+function modalSesion(proyectoId, id) {
+  const s = id ? Store.merged('ProyectoSesiones').find(x => x.id === id) : null;
+  const sugerido = 'Sesión ' + (sesionesDe(proyectoId).length + 1);
+  openModal(`
+    <h2>${s ? 'Editar sesión' : 'Nueva sesión'}</h2>
+    <div class="field"><label>Nombre</label><input id="sesNombre" value="${esc(s ? s.nombre : sugerido)}"></div>
+    <div class="field"><label>Fecha</label><input id="sesFecha" type="date" value="${esc(s ? s.fecha : todayISO())}"></div>
+    <button class="btn block" onclick="guardarSesion('${proyectoId}', ${s ? `'${s.id}'` : 'null'})">Guardar</button>
+    ${s ? `<button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarSesion('${s.id}')">Eliminar sesión</button>` : ''}
+  `);
+}
+function guardarSesion(proyectoId, id) {
+  const nombre = document.getElementById('sesNombre').value.trim();
+  const fecha = document.getElementById('sesFecha').value || todayISO();
+  if (!nombre) { toast('Ponle un nombre a la sesión'); return; }
+  const existente = id ? Store.merged('ProyectoSesiones').find(x => x.id === id) : null;
+  let row;
+  if (existente) row = Object.assign({}, existente, { nombre, fecha });
+  else {
+    const orden = sesionesDe(proyectoId).reduce((m, x) => Math.max(m, Number(x.orden || 0)), 0) + 1;
+    row = { id: uid(), proyectoId, nombre, orden, fecha };
+  }
+  guardarFilaProyecto('ProyectoSesiones', row);
+  closeModal();
+  renderCurrentView();
+}
+function confirmarEliminarSesion(id) {
+  const s = Store.merged('ProyectoSesiones').find(x => x.id === id);
+  const nNotas = Store.merged('ProyectoNotas').filter(n => n.sesionId === id).length;
+  openModal(`
+    <h2>Eliminar sesión</h2>
+    <p>¿Eliminar <strong>${esc(s ? s.nombre : '')}</strong>?</p>
+    <p class="muted">Se borrarán también sus ${nNotas} nota(s) de todos los equipos.</p>
+    <div class="row">
+      <button class="btn secondary block" onclick="closeModal()">Cancelar</button>
+      <button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarSesion('${id}')">Eliminar</button>
+    </div>
+  `);
+}
+async function eliminarSesion(id) {
+  const notasIds = Store.merged('ProyectoNotas').filter(n => n.sesionId === id).map(n => n.id);
+  quitarLocal('ProyectoNotas', r => r.sesionId === id);
+  quitarLocal('ProyectoSesiones', r => r.id === id);
+  Store.persist();
+  closeModal();
+  toast('Sesión eliminada');
+  renderCurrentView();
+  await borrarRemoto('deleteProyectoNota', notasIds);
+  await borrarRemoto('deleteProyectoSesion', [id]);
+}
+
+/* ---------- Notas (equipo × sesión) ---------- */
+function modalNota(equipoId, sesionId) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === equipoId);
+  const s = Store.merged('ProyectoSesiones').find(x => x.id === sesionId);
+  if (!e || !s) return;
+  const n = Store.merged('ProyectoNotas').find(x => x.equipoId === equipoId && x.sesionId === sesionId);
+  openModal(`
+    <h2>${esc(e.nombre)} · ${esc(s.nombre)}</h2>
+    <p class="muted">${esc(s.fecha || '')}</p>
+    <div class="field"><label>Notas de seguimiento (máx. 1200 caracteres)</label>
+      <textarea id="notaTexto" maxlength="1200" style="min-height:140px;" placeholder="Avances, acuerdos, dificultades, qué falta…">${esc(n ? n.texto : '')}</textarea>
+    </div>
+    <button class="btn block" onclick="guardarNota('${equipoId}','${sesionId}')">Guardar</button>
+    ${n ? `<button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="borrarNota('${n.id}')">Borrar nota</button>` : ''}
+  `);
+}
+function guardarNota(equipoId, sesionId) {
+  const e = Store.merged('ProyectoEquipos').find(x => x.id === equipoId);
+  if (!e) return;
+  const texto = document.getElementById('notaTexto').value.trim();
+  const existente = Store.merged('ProyectoNotas').find(x => x.equipoId === equipoId && x.sesionId === sesionId);
+  if (!texto) {
+    if (existente) { borrarNota(existente.id); return; }
+    closeModal(); return;
+  }
+  guardarFilaProyecto('ProyectoNotas', { id: existente ? existente.id : uid(), proyectoId: e.proyectoId, equipoId, sesionId, texto });
+  closeModal();
+  toast('Nota guardada');
+  renderCurrentView();
+}
+async function borrarNota(id) {
+  quitarLocal('ProyectoNotas', r => r.id === id);
+  Store.persist();
+  closeModal();
+  toast('Nota borrada');
+  renderCurrentView();
+  await borrarRemoto('deleteProyectoNota', [id]);
 }
 
 /* ================================================================
