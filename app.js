@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v39'
+  APP_VERSION: 'v40'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -308,6 +308,15 @@ function uid() { return 'id_' + Date.now().toString(36) + Math.random().toString
 function dateToISO(d) { const tz = d.getTimezoneOffset(); return new Date(d.getTime() - tz * 60000).toISOString().slice(0, 10); }
 function todayISO() { return dateToISO(new Date()); }
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// Punto discreto junto al nombre cuando el alumno tiene una nota particular
+// (nunca muestra el contenido aquí, solo avisa que existe).
+function tieneNota(alumnoId) {
+  const a = Store.data.Alumnos.find(x => x.id === alumnoId);
+  return !!(a && a.notas && String(a.notas).trim());
+}
+function puntoNota(alumnoId) {
+  return tieneNota(alumnoId) ? '<span class="nota-dot" title="Tiene una nota particular"></span>' : '';
+}
 // Para insertar texto libre del usuario como literal JS ('...') dentro de un atributo onclick="..."
 function attrJs(s) {
   const js = (s ?? '').toString().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -653,7 +662,7 @@ function viewAsistenciaGrid() {
       </tr></thead>
       <tbody>
         ${alumnos.map(a => `<tr>
-          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}${rachaFaltasConsecutivas(a.id, ctx.grupoId) >= 3 ? ` <span title="3+ faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}</td>
+          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}${puntoNota(a.id)}${rachaFaltasConsecutivas(a.id, ctx.grupoId) >= 3 ? ` <span title="3+ faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}</td>
           ${dias.map(f => {
             const reg = registros.find(r => r.alumnoId === a.id && r.fecha === f);
             const est = reg ? reg.estatus : '';
@@ -751,7 +760,7 @@ function rosterRow(a, registro) {
   const estatusActual = registro ? registro.estatus : null;
   const racha = rachaFaltasConsecutivas(a.id, ctx.grupoId);
   return `<div class="roster-item" data-alumno="${a.id}" data-registro="${registro ? registro.id : ''}">
-    <div class="roster-name">${esc(a.nombre)}${racha >= 3 ? ` <span title="${racha} faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}<br>
+    <div class="roster-name">${esc(a.nombre)}${puntoNota(a.id)}${racha >= 3 ? ` <span title="${racha} faltas seguidas" style="color:var(--danger);">⚠</span>` : ''}<br>
       <span class="muted" style="font-size:.72rem; font-weight:400;">P:${c.Presente} · A:${c.Ausente} · R:${c.Retardo} · J:${c.Justificado}</span>
     </div>
     <div class="status-btns">
@@ -888,7 +897,7 @@ function califVistaGrid(grupo, rubros) {
       </tr></thead>
       <tbody>
         ${alumnos.map(a => `<tr>
-          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}</td>
+          <td style="position:sticky; left:0; background:var(--paper-raised); font-weight:500;">${esc(a.nombre)}${puntoNota(a.id)}</td>
           ${actividades.map(act => {
             const rows = calRows.filter(c => c.alumnoId === a.id && c.actividadId === act.id);
             const ultimo = rows[rows.length - 1];
@@ -1054,7 +1063,7 @@ function alumnoCalifCard(alumno, rubros, calRows) {
   });
   return `
   <div class="card">
-    <div class="row between"><strong>${esc(alumno.nombre)}</strong><span class="tag">${final.toFixed(1)}</span></div>
+    <div class="row between"><strong>${esc(alumno.nombre)}${puntoNota(alumno.id)}</strong><span class="tag">${final.toFixed(1)}</span></div>
     ${rubros.map(r => {
       const vals = porRubro[r.rubro];
       const prom = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '—';
