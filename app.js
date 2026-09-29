@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v40'
+  APP_VERSION: 'v41'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -308,14 +308,27 @@ function uid() { return 'id_' + Date.now().toString(36) + Math.random().toString
 function dateToISO(d) { const tz = d.getTimezoneOffset(); return new Date(d.getTime() - tz * 60000).toISOString().slice(0, 10); }
 function todayISO() { return dateToISO(new Date()); }
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-// Punto discreto junto al nombre cuando el alumno tiene una nota particular
-// (nunca muestra el contenido aquí, solo avisa que existe).
-function tieneNota(alumnoId) {
+// Categorías de "nota particular" — cada una con su color y su nombre.
+// El nombre SIEMPRE acompaña al color (nunca es la única pista), para quien
+// tenga dificultad para distinguir colores.
+const CATEGORIAS_NOTA = {
+  especial:  { color: '#2F5C82', label: 'Caso especial' },
+  salud:     { color: '#B5533C', label: 'Salud' },
+  conducta:  { color: '#D9B72E', label: 'Conducta' },
+  sobresale: { color: '#4C7A5E', label: 'Sobresale' },
+  otro:      { color: '#C48A34', label: 'Otro' }
+};
+function categoriaNota(alumnoId) {
   const a = Store.data.Alumnos.find(x => x.id === alumnoId);
-  return !!(a && a.notas && String(a.notas).trim());
+  if (!a || !a.notas || !String(a.notas).trim()) return null;
+  return CATEGORIAS_NOTA[a.notaCategoria] || CATEGORIAS_NOTA.especial;
 }
+// Punto discreto junto al nombre cuando el alumno tiene una nota particular
+// (nunca muestra el contenido aquí, solo el color + nombre de categoría).
+function tieneNota(alumnoId) { return !!categoriaNota(alumnoId); }
 function puntoNota(alumnoId) {
-  return tieneNota(alumnoId) ? '<span class="nota-dot" title="Tiene una nota particular"></span>' : '';
+  const c = categoriaNota(alumnoId);
+  return c ? `<span class="nota-dot" style="background:${c.color};" title="Nota: ${esc(c.label)}"></span>` : '';
 }
 // Para insertar texto libre del usuario como literal JS ('...') dentro de un atributo onclick="..."
 function attrJs(s) {
