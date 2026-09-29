@@ -98,7 +98,7 @@ function alumnosListaHTML() {
   const grupoName = (id) => { const g = grupos.find(x => x.id === id); return g ? `${g.grado}${g.grupo} · ${g.asignatura}` : '—'; };
   return alumnos.length === 0 ? '<p class="muted">Sin resultados.</p>' : alumnos.map(a => `
       <div class="card-flat row between">
-        <div><strong>${esc(a.nombre)}</strong>${a.notas ? ' <span class="tag">nota</span>' : ''}<br><span class="muted">${grupoName(a.grupoId)}</span></div>
+        <div><strong>${esc(a.nombre)}${puntoNota(a.id)}</strong>${a.notas ? ` <span class="tag" style="background:transparent; border:1px solid ${categoriaNota(a.id).color}; color:${categoriaNota(a.id).color};">${esc(categoriaNota(a.id).label)}</span>` : ''}<br><span class="muted">${grupoName(a.grupoId)}</span></div>
         <div class="row">
           <button class="btn small ghost" onclick="abrirNuevaIncidencia('${a.id}','${attrJs(a.nombre)}','${a.grupoId}')">Incidencia</button>
           <button class="btn small ghost" onclick="modalAlumno('${a.id}')">Editar</button>
@@ -119,12 +119,27 @@ function modalAlumno(id) {
     <div class="field"><label>Grupo</label>
       <select id="aGrupo">${grupos.map(g => `<option value="${g.id}" ${a && a.grupoId === g.id ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}</select>
     </div>
-    ${a ? `<div class="field"><label>Notas particulares (solo para ti)</label><textarea id="aNotas" placeholder="Ej. alergias, acuerdos con el padre, seguimiento especial…">${esc(a.notas)}</textarea></div>` : ''}
+    ${a ? `<div class="field"><label>Notas particulares (solo para ti)</label><textarea id="aNotas" placeholder="Ej. alergias, acuerdos con el padre, seguimiento especial…">${esc(a.notas)}</textarea></div>
+    <div class="field"><label>Categoría de la nota</label>
+      <div class="chip-list" id="notaCatChips">${chipsCategoriaNota(a.notaCategoria || 'especial')}</div>
+      <input type="hidden" id="aNotaCategoria" value="${esc(a.notaCategoria || 'especial')}">
+    </div>` : ''}
     <button class="btn block" onclick="guardarAlumno(${a ? `'${a.id}'` : 'null'})">Guardar</button>
     ${a ? `<div class="divider"></div>
       <button class="btn block secondary" onclick="modalMigrar('${a.id}')">Cambiar de grupo (migrar)</button>
       <button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarBaja('${a.id}')">Dar de baja</button>` : ''}
   `);
+}
+function chipsCategoriaNota(seleccionada) {
+  return Object.entries(CATEGORIAS_NOTA).map(([id, c]) => {
+    const on = id === seleccionada;
+    return `<span class="chip" data-cat="${id}" onclick="seleccionarCategoriaNota('${id}')"
+      style="border-color:${c.color}; ${on ? `background:${c.color}; color:#fff;` : `background:transparent; color:${c.color};`}">${esc(c.label)}</span>`;
+  }).join('');
+}
+function seleccionarCategoriaNota(id) {
+  document.getElementById('aNotaCategoria').value = id;
+  document.getElementById('notaCatChips').innerHTML = chipsCategoriaNota(id);
 }
 function guardarAlumno(id) {
   const nombre = document.getElementById('aNombre').value.trim();
@@ -135,6 +150,7 @@ function guardarAlumno(id) {
     id: id || uid(), nombre, matricula: document.getElementById('aMatricula').value.trim(),
     grupoId, activo: true,
     notas: id ? document.getElementById('aNotas').value : '',
+    notaCategoria: id ? (document.getElementById('aNotaCategoria').value || 'especial') : (existente ? existente.notaCategoria : undefined) || 'especial',
     historialGrupos: existente ? existente.historialGrupos : '[]'
   };
   Store.upsertLocal('Alumnos', row);
@@ -289,7 +305,7 @@ function renderPerfilDetalle(a) {
       diarioGrupo.map(d => `<div class="diary-entry"><div class="diary-type">${esc(d.tipo)} · ${esc(d.fecha)}</div><div>${esc(d.texto)}</div></div>`).join('')}
 
     <h3 style="margin-top:16px;">Notas particulares</h3>
-    ${a.notas ? `<div class="card-flat">${esc(a.notas)}</div>` : '<p class="muted">Sin notas.</p>'}
+    ${a.notas ? `<div class="card-flat"><span class="tag" style="background:transparent; border:1px solid ${categoriaNota(a.id).color}; color:${categoriaNota(a.id).color}; margin-bottom:6px;">${esc(categoriaNota(a.id).label)}</span><br>${esc(a.notas)}</div>` : '<p class="muted">Sin notas.</p>'}
     <button class="btn small ghost" onclick="modalAlumno('${a.id}')">Editar notas</button>
   `;
 }
