@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v42'
+  APP_VERSION: 'v43'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -75,12 +75,12 @@ function tarjetaHorarioActual() {
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] },
   // Estructura vacía completa: se usa al recibir datos del servidor, para que una
   // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
   emptyData() {
-    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [] };
+    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] };
   },
 
   load() {
@@ -238,6 +238,11 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el horario');
     }
     Store.queue.Horario = [];
+    for (const pl of Store.queue.Planeaciones) {
+      const res = await jsonp('savePlaneacionCarpeta', { data: JSON.stringify(pl) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la carpeta de planeaciones');
+    }
+    Store.queue.Planeaciones = [];
     // Proyectos: en orden (proyecto → equipos → sesiones → notas). Cada elemento se
     // quita de la cola solo cuando el servidor confirma, para no perder nada si se corta.
     const tablasProyecto = [
