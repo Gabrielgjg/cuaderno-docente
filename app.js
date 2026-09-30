@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v41'
+  APP_VERSION: 'v42'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -1536,6 +1536,7 @@ function viewDiario() {
     .sort((a, b) => (b.fecha + (b.timestamp || '')).localeCompare(a.fecha + (a.timestamp || '')));
 
   return `
+    <button class="btn small secondary no-print" style="margin-bottom:10px;" onclick="verPlaneaciones()">📎 Ver planeaciones</button>
     <div class="card">
       <div class="field"><label>Tipo</label>
         <div class="chip-list" id="diarioTipoChips">
@@ -1605,6 +1606,49 @@ async function eliminarDiario(id) {
   toast('Entrada eliminada');
   try { await jsonp('deleteDiario', { id }); } catch (e) {}
   renderCurrentView();
+}
+
+/* ---------------- Planeaciones (carpeta de Drive de la materia) ---------------- */
+// Se consulta a Drive en vivo cada vez (no se guarda copia local ni se sincroniza offline).
+function formatoTamano(bytes) {
+  if (!bytes) return '';
+  const kb = bytes / 1024;
+  return kb < 1024 ? Math.round(kb) + ' KB' : (kb / 1024).toFixed(1) + ' MB';
+}
+function verPlaneaciones() {
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  if (!grupo) { toast('Selecciona un grupo primero'); return; }
+  abrirModalPlaneaciones(grupo, 'cargando');
+  jsonp('listPlaneaciones', { asignatura: grupo.asignatura })
+    .then(res => {
+      if (!res || !res.ok) abrirModalPlaneaciones(grupo, 'error', (res && res.error) || 'No se pudo consultar Drive.');
+      else if (!res.data.folderId) abrirModalPlaneaciones(grupo, 'sin-carpeta');
+      else abrirModalPlaneaciones(grupo, 'lista', null, res.data.archivos);
+    })
+    .catch(() => abrirModalPlaneaciones(grupo, 'error', 'No se pudo conectar. Revisa tu internet.'));
+}
+function abrirModalPlaneaciones(grupo, estado, error, archivos) {
+  let cuerpo;
+  if (estado === 'cargando') {
+    cuerpo = '<p class="muted">Consultando Drive…</p>';
+  } else if (estado === 'sin-carpeta') {
+    cuerpo = `<p class="muted">Aún no hay carpeta de Drive configurada para <strong>${esc(grupo.asignatura)}</strong>.</p>
+      <button class="btn small secondary" onclick="closeModal(); goTo('admin'); adminTab='planeaciones'; renderCurrentView();">Configurarla en Admin</button>`;
+  } else if (estado === 'error') {
+    cuerpo = `<p class="muted">⚠ ${esc(error)}</p><button class="btn small secondary" onclick="verPlaneaciones()">Reintentar</button>`;
+  } else if (!archivos.length) {
+    cuerpo = '<p class="muted">Esa carpeta de Drive está vacía por ahora.</p>';
+  } else {
+    cuerpo = archivos.map(a => `
+      <div class="card-flat row between">
+        <div><strong>${esc(a.nombre)}</strong><br><span class="muted small">${esc(a.actualizado)}${a.tamano ? ' · ' + formatoTamano(a.tamano) : ''}</span></div>
+        <div class="row">
+          <a class="btn small secondary" href="${esc(a.url)}" target="_blank" rel="noopener">Abrir</a>
+          ${a.nativoGoogle ? '' : `<a class="btn small ghost" href="https://drive.google.com/uc?export=download&id=${esc(a.id)}" target="_blank" rel="noopener">Descargar</a>`}
+        </div>
+      </div>`).join('');
+  }
+  openModal(`<h2>Planeaciones · ${esc(grupo.asignatura)}</h2>${cuerpo}`);
 }
 function selectChip(el) {
   el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
