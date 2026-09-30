@@ -12,10 +12,11 @@ function viewAdmin() {
     { id: 'encuadres', label: 'Encuadres' },
     { id: 'diagnostico', label: 'Diagnóstico' },
     { id: 'horario', label: 'Horario' },
+    { id: 'planeaciones', label: 'Planeaciones' },
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, planeaciones: adminPlaneaciones, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -534,6 +535,47 @@ function guardarHorarioCelda(sel) {
   scheduleSyncPending();
   sel.dataset.reg = row.id;
   toast('Guardado');
+}
+
+/* ---------------- PLANEACIONES (carpetas de Drive por materia) ---------------- */
+function extraerFolderId(texto) {
+  const t = String(texto || '').trim();
+  const m = t.match(/folders\/([a-zA-Z0-9_-]{10,})/);
+  if (m) return m[1];
+  return /^[a-zA-Z0-9_-]{10,}$/.test(t) ? t : null;   // también acepta pegar solo el ID
+}
+function adminPlaneaciones() {
+  const asignaturas = [...new Set(Store.data.Grupos.map(g => g.asignatura).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  const config = Store.merged('Planeaciones');
+  if (asignaturas.length === 0) return '<p class="muted">Da de alta un grupo primero (con su materia).</p>';
+  return `
+    <div class="card">
+      <h3>Carpetas de Drive por materia</h3>
+      <p class="muted small">En Drive, comparte cada carpeta como "Cualquiera con el enlace puede ver" y pega aquí su enlace (o solo el ID). El botón "Ver planeaciones" en Diario mostrará estos archivos según la materia del grupo.</p>
+      ${asignaturas.map(asig => {
+        const c = config.find(x => x.asignatura === asig);
+        return `<div class="field">
+          <label>${esc(asig)}</label>
+          <div class="row">
+            <input class="pf-input" data-asig="${esc(asig)}" value="${c ? esc(c.folderId) : ''}" placeholder="Pega el enlace de la carpeta…" style="flex:1; padding:9px 10px; border:1px solid var(--line); border-radius:var(--radius);">
+            <button class="btn small" onclick="guardarCarpetaPlaneacion(this)">Guardar</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+function guardarCarpetaPlaneacion(btn) {
+  const input = btn.previousElementSibling;
+  const asig = input.dataset.asig;
+  const folderId = extraerFolderId(input.value);
+  if (!folderId) { toast('Pega un enlace o ID de carpeta de Drive válido'); return; }
+  const existente = Store.merged('Planeaciones').find(x => x.asignatura === asig);
+  const row = { id: existente ? existente.id : uid(), asignatura: asig, folderId, folderNombre: asig };
+  Store.upsertLocal('Planeaciones', row);
+  Store.enqueue('Planeaciones', row);
+  Store.persist();
+  scheduleSyncPending();
+  toast('Carpeta guardada para ' + asig);
 }
 
 /* ---------------- IMPORTAR (CSV / Excel exportado + OCR con cámara) ---------------- */
