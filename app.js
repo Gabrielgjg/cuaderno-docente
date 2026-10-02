@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v44'
+  APP_VERSION: 'v45'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -325,11 +325,11 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '
 // El nombre SIEMPRE acompaña al color (nunca es la única pista), para quien
 // tenga dificultad para distinguir colores.
 const CATEGORIAS_NOTA = {
-  especial:  { color: '#2F5C82', label: 'Caso especial' },
-  salud:     { color: '#B5533C', label: 'Salud' },
-  conducta:  { color: '#D9B72E', label: 'Conducta' },
-  sobresale: { color: '#4C7A5E', label: 'Sobresale' },
-  otro:      { color: '#C48A34', label: 'Otro' }
+  especial:  { color: '#2F5C82', label: 'Caso especial', icono: '🧩' },
+  salud:     { color: '#B5533C', label: 'Salud',         icono: '⚕' },
+  conducta:  { color: '#D9B72E', label: 'Conducta',      icono: '⚠' },
+  sobresale: { color: '#4C7A5E', label: 'Sobresale',     icono: '★' },
+  otro:      { color: '#C48A34', label: 'Otro',          icono: '📌' }
 };
 function categoriaNota(alumnoId) {
   const a = Store.data.Alumnos.find(x => x.id === alumnoId);
@@ -341,7 +341,9 @@ function categoriaNota(alumnoId) {
 function tieneNota(alumnoId) { return !!categoriaNota(alumnoId); }
 function puntoNota(alumnoId) {
   const c = categoriaNota(alumnoId);
-  return c ? `<span class="nota-dot" style="background:${c.color};" title="Nota: ${esc(c.label)}"></span>` : '';
+  // El ícono distingue la categoría por su FORMA, no solo por el color — así también
+  // funciona para quien tenga dificultad para distinguir colores.
+  return c ? `<span class="nota-dot" style="background:${c.color};" title="Nota: ${esc(c.label)}">${c.icono}</span>` : '';
 }
 // Para insertar texto libre del usuario como literal JS ('...') dentro de un atributo onclick="..."
 function attrJs(s) {
