@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v43'
+  APP_VERSION: 'v44'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -111,7 +111,11 @@ const Store = {
 
   enqueue(sheet, obj) {
     if (!this.queue[sheet]) this.queue[sheet] = [];
-    this.queue[sheet].push(obj);
+    // Si ya había una versión pendiente del mismo registro (p.ej. lo marcaste Presente
+    // y lo corregiste a Ausente antes de que la primera terminara de sincronizar),
+    // la REEMPLAZA en vez de dejarla ahí — nunca debe haber dos versiones peleando.
+    const idx = this.queue[sheet].findIndex(r => r.id === obj.id);
+    if (idx >= 0) this.queue[sheet][idx] = obj; else this.queue[sheet].push(obj);
     this.persist();
   },
 
@@ -208,41 +212,45 @@ async function syncPending(manual) {
         payload[cat.campo] = chunk;
         const res = await jsonp('sync', { data: JSON.stringify(payload) });
         if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó ' + cat.key);
-        const sentIds = new Set(chunk.map(r => r.id));
-        Store.queue[cat.key] = Store.queue[cat.key].filter(r => !sentIds.has(r.id));
+        // Se borran de la cola SOLO las versiones exactas que se mandaron (por referencia,
+        // no por id): si mientras el servidor respondía llegó una corrección más nueva del
+        // mismo registro, "enqueue" ya la puso en su lugar — y esa nueva se queda intacta
+        // para la siguiente sincronización, en vez de borrarse por error junto con la vieja.
+        const sentSet = new Set(chunk);
+        Store.queue[cat.key] = Store.queue[cat.key].filter(r => !sentSet.has(r));
         Store.persist();
       }
     }
-    for (const g of Store.queue.Grupos) {
+    for (const g of Store.queue.Grupos.slice()) {
       const res = await jsonp('saveGrupo', { data: JSON.stringify(g) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el grupo');
+      Store.queue.Grupos = Store.queue.Grupos.filter(x => x !== g);
     }
-    Store.queue.Grupos = [];
-    for (const a of Store.queue.Alumnos) {
+    for (const a of Store.queue.Alumnos.slice()) {
       const res = await jsonp('saveAlumno', { data: JSON.stringify(a) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el alumno');
+      Store.queue.Alumnos = Store.queue.Alumnos.filter(x => x !== a);
     }
-    Store.queue.Alumnos = [];
-    for (const act of Store.queue.Actividades) {
+    for (const act of Store.queue.Actividades.slice()) {
       const res = await jsonp('saveActividad', { data: JSON.stringify(act) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la actividad');
+      Store.queue.Actividades = Store.queue.Actividades.filter(x => x !== act);
     }
-    Store.queue.Actividades = [];
-    for (const d of Store.queue.Diagnosticos) {
+    for (const d of Store.queue.Diagnosticos.slice()) {
       const res = await jsonp('saveDiagnostico', { data: JSON.stringify(d) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el diagnóstico');
+      Store.queue.Diagnosticos = Store.queue.Diagnosticos.filter(x => x !== d);
     }
-    Store.queue.Diagnosticos = [];
-    for (const h of Store.queue.Horario) {
+    for (const h of Store.queue.Horario.slice()) {
       const res = await jsonp('saveHorario', { data: JSON.stringify(h) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el horario');
+      Store.queue.Horario = Store.queue.Horario.filter(x => x !== h);
     }
-    Store.queue.Horario = [];
-    for (const pl of Store.queue.Planeaciones) {
+    for (const pl of Store.queue.Planeaciones.slice()) {
       const res = await jsonp('savePlaneacionCarpeta', { data: JSON.stringify(pl) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la carpeta de planeaciones');
+      Store.queue.Planeaciones = Store.queue.Planeaciones.filter(x => x !== pl);
     }
-    Store.queue.Planeaciones = [];
     // Proyectos: en orden (proyecto → equipos → sesiones → notas). Cada elemento se
     // quita de la cola solo cuando el servidor confirma, para no perder nada si se corta.
     const tablasProyecto = [
@@ -848,10 +856,10 @@ function viewCalificaciones() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
+  if (califVista === 'alumno') califVista = 'grid';   // la vista "Por alumno" ya no existe
   const chips = `
     <div class="chip-list">
       <span class="chip ${califVista === 'grid' ? 'active' : ''}" onclick="califVista='grid'; renderCurrentView();">Cuadrícula</span>
-      <span class="chip ${califVista === 'alumno' ? 'active' : ''}" onclick="califVista='alumno'; renderCurrentView();">Por alumno</span>
       <span class="chip ${califVista === 'proyectos' ? 'active' : ''}" onclick="califVista='proyectos'; renderCurrentView();">Proyectos</span>
     </div>`;
   // Proyectos no depende del encuadre: se muestra aunque aún no esté configurado
@@ -863,13 +871,8 @@ function viewCalificaciones() {
   return `
     <div class="card-flat muted">Encuadre de <strong>${esc(grupo.asignatura)}</strong>: ${rubros.map(r => `${esc(r.rubro)} (${r.porcentaje}%)`).join(' · ')}</div>
     ${chips}
-    ${califVista === 'alumno' ? califVistaAlumno(grupo, rubros) : califVistaGrid(grupo, rubros)}
+    ${califVistaGrid(grupo, rubros)}
   `;
-}
-function califVistaAlumno(grupo, rubros) {
-  const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-  return alumnos.map(a => alumnoCalifCard(a, rubros, calRows.filter(c => c.alumnoId === a.id))).join('');
 }
 function califVistaGrid(grupo, rubros) {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -1066,110 +1069,6 @@ function actualizarPromedioAlumno(alumnoId, grupo) {
     if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
   });
   el.textContent = final.toFixed(1);
-}
-function alumnoCalifCard(alumno, rubros, calRows) {
-  const porRubro = {};
-  rubros.forEach(r => { porRubro[r.rubro] = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor)); });
-  let final = 0, sumPct = 0;
-  rubros.forEach(r => {
-    const vals = porRubro[r.rubro];
-    if (vals.length) {
-      const prom = vals.reduce((a, b) => a + b, 0) / vals.length;
-      final += prom * (Number(r.porcentaje) / 100);
-    }
-    sumPct += Number(r.porcentaje);
-  });
-  return `
-  <div class="card">
-    <div class="row between"><strong>${esc(alumno.nombre)}${puntoNota(alumno.id)}</strong><span class="tag">${final.toFixed(1)}</span></div>
-    ${rubros.map(r => {
-      const vals = porRubro[r.rubro];
-      const prom = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '—';
-      return `<div class="row between" style="margin-top:8px;">
-        <span class="muted" ${vals.length ? `onclick="verEvidencias('${alumno.id}','${attrJs(r.rubro)}')" style="text-decoration:underline; cursor:pointer;"` : ''}>${esc(r.rubro)} (${r.porcentaje}%) · prom. ${prom} · ${vals.length} evid.</span>
-        <button class="btn small secondary" onclick="abrirCapturaEvidencia('${alumno.id}','${attrJs(r.rubro)}')">+ Evidencia</button>
-      </div>`;
-    }).join('')}
-  </div>`;
-}
-function verEvidencias(alumnoId, rubro) {
-  const rows = Store.merged('Calificaciones')
-    .filter(c => c.alumnoId === alumnoId && c.rubro === rubro && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-  const alumno = Store.data.Alumnos.find(a => a.id === alumnoId);
-  openModal(`
-    <h2>${esc(rubro)}</h2>
-    <p class="muted">${esc(alumno ? alumno.nombre : '')}</p>
-    ${rows.map(r => `
-      <div class="card-flat row between">
-        <div><strong>${r.valor}</strong> — ${esc(r.evidencia || 'sin descripción')}<br><span class="muted">${esc(r.fecha)}</span></div>
-        <div class="row">
-          <button class="btn small ghost" onclick="editarEvidencia('${r.id}')">Editar</button>
-          <button class="btn small ghost" style="color:var(--danger);" onclick="borrarEvidencia('${r.id}','${alumnoId}','${attrJs(rubro)}')">✕</button>
-        </div>
-      </div>`).join('')}
-  `);
-}
-function editarEvidencia(id) {
-  const row = Store.merged('Calificaciones').find(c => c.id === id);
-  if (!row) return;
-  openModal(`
-    <h2>Editar evidencia</h2>
-    <p class="muted">${esc(row.rubro)} · ${esc(row.trimestre)}</p>
-    <div class="field"><label>Descripción</label><input id="evDesc" value="${esc(row.evidencia)}"></div>
-    <div class="field"><label>Calificación (0–10)</label><input id="evValor" type="number" min="0" max="10" step="0.1" value="${row.valor}"></div>
-    <div class="field"><label>Fecha</label><input id="evFecha" type="date" value="${row.fecha}"></div>
-    <button class="btn block" onclick="guardarEdicionEvidencia('${id}')">Guardar cambios</button>
-  `);
-}
-function guardarEdicionEvidencia(id) {
-  const valor = parseFloat(document.getElementById('evValor').value);
-  if (isNaN(valor) || valor < 0 || valor > 10) { toast('Calificación inválida (0–10)'); return; }
-  let row = Store.data.Calificaciones.find(c => c.id === id) || Store.queue.Calificaciones.find(c => c.id === id);
-  if (!row) return;
-  row.valor = valor;
-  row.evidencia = document.getElementById('evDesc').value;
-  row.fecha = document.getElementById('evFecha').value;
-  Store.enqueue('Calificaciones', row); // upsert por id, sobreescribe en el Sheet
-  Store.persist();
-  closeModal();
-  toast('Evidencia actualizada');
-  scheduleSyncPending();
-  renderCurrentView();
-}
-async function borrarEvidencia(id, alumnoId, rubro) {
-  Store.data.Calificaciones = Store.data.Calificaciones.filter(c => c.id !== id);
-  Store.queue.Calificaciones = Store.queue.Calificaciones.filter(c => c.id !== id);
-  Store.persist();
-  toast('Evidencia borrada');
-  try { await jsonp('deleteCalificacion', { id }); } catch (e) {}
-  verEvidencias(alumnoId, rubro);
-  renderCurrentView();
-}
-function abrirCapturaEvidencia(alumnoId, rubro) {
-  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
-  openModal(`
-    <h2>Nueva evidencia</h2>
-    <p class="muted">${esc(rubro)} · ${ctx.trimestre}</p>
-    <div class="field"><label>Descripción</label><input id="evDesc" placeholder="Ej. Examen unidad 2"></div>
-    <div class="field"><label>Calificación (0–10)</label><input id="evValor" type="number" min="0" max="10" step="0.1"></div>
-    <div class="field"><label>Fecha</label><input id="evFecha" type="date" value="${todayISO()}"></div>
-    <button class="btn block" onclick="guardarEvidencia('${alumnoId}','${attrJs(rubro)}','${attrJs(grupo.asignatura)}')">Guardar</button>
-  `);
-}
-function guardarEvidencia(alumnoId, rubro, asignatura) {
-  const valor = parseFloat(document.getElementById('evValor').value);
-  if (isNaN(valor) || valor < 0 || valor > 10) { toast('Calificación inválida (0–10)'); return; }
-  const row = {
-    id: uid(), alumnoId, grupoId: ctx.grupoId, asignatura, trimestre: ctx.trimestre, rubro,
-    valor, evidencia: document.getElementById('evDesc').value, fecha: document.getElementById('evFecha').value
-  };
-  Store.upsertLocal('Calificaciones', row);
-  Store.enqueue('Calificaciones', row);
-  Store.persist();
-  closeModal();
-  toast('Evidencia guardada');
-  scheduleSyncPending();
-  renderCurrentView();
 }
 
 /* ================================================================
