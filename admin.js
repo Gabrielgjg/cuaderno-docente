@@ -13,10 +13,11 @@ function viewAdmin() {
     { id: 'diagnostico', label: 'Diagnóstico' },
     { id: 'horario', label: 'Horario' },
     { id: 'planeaciones', label: 'Planeaciones' },
+    { id: 'rubrica', label: 'Rúbrica equipos' },
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, planeaciones: adminPlaneaciones, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, planeaciones: adminPlaneaciones, rubrica: adminRubrica, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -576,6 +577,100 @@ function guardarCarpetaPlaneacion(btn) {
   Store.persist();
   scheduleSyncPending();
   toast('Carpeta guardada para ' + asig);
+}
+
+/* ---------------- Rúbrica de equipos (criterios, configuración) ---------------- */
+function adminRubrica() {
+  const criterios = criteriosRubricaActivos();
+  return `
+    <div class="card">
+      <h3>Rúbrica de equipos</h3>
+      <p class="muted small">Estos criterios aparecen al evaluar un equipo dentro de Proyectos. Puedes editar, quitar, agregar, o volver a los 6 originales.</p>
+      ${criterios.length === 0 ? '<p class="muted">Sin criterios activos.</p>' : criterios.map(c => `
+        <div class="card-flat row between">
+          <span>${esc(c.nombre)}</span>
+          <div class="row">
+            <button class="btn small ghost" onclick="modalCriterioRubrica('${c.id}')">Editar</button>
+          </div>
+        </div>`).join('')}
+      <button class="btn small secondary" style="margin-top:8px;" onclick="modalCriterioRubrica()">+ Nuevo criterio</button>
+      <button class="btn small ghost" style="margin-top:8px; margin-left:6px;" onclick="confirmarRestaurarCriterios()">Restaurar los 6 originales</button>
+    </div>`;
+}
+function modalCriterioRubrica(id) {
+  const c = id ? Store.merged('RubricaCriterios').find(x => x.id === id) : null;
+  let niveles;
+  try { niveles = c ? JSON.parse(c.niveles) : NIVELES_RUBRICA.map(n => ({ nombre: n.nombre, min: n.min, max: n.max, desc: '' })); }
+  catch (e) { niveles = NIVELES_RUBRICA.map(n => ({ nombre: n.nombre, min: n.min, max: n.max, desc: '' })); }
+  openModal(`
+    <h2>${c ? 'Editar' : 'Nuevo'} criterio</h2>
+    <div class="field"><label>Nombre del criterio</label><input id="critNombre" value="${esc(c ? c.nombre : '')}" placeholder="Ej. Trabajo en equipo"></div>
+    <p class="muted small" style="margin-bottom:4px;">Describe qué se espera en cada nivel (los puntajes ya están fijos):</p>
+    ${niveles.map((n, i) => `
+      <div class="field">
+        <label>${esc(n.nombre)} (${n.min === n.max ? n.min : n.min + '–' + n.max})</label>
+        <input class="crit-desc" data-i="${i}" value="${esc(n.desc || '')}" placeholder="Descripción de este nivel…">
+      </div>`).join('')}
+    <button class="btn block" onclick="guardarCriterioRubrica(${c ? `'${c.id}'` : 'null'})">Guardar</button>
+    ${c ? `<button class="btn block ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="confirmarEliminarCriterio('${c.id}')">Eliminar criterio</button>` : ''}
+  `);
+}
+function guardarCriterioRubrica(id) {
+  const nombre = document.getElementById('critNombre').value.trim();
+  if (!nombre) { toast('Ponle un nombre al criterio'); return; }
+  const descs = [...document.querySelectorAll('.crit-desc')].sort((a, b) => Number(a.dataset.i) - Number(b.dataset.i)).map(inp => inp.value.trim());
+  const niveles = NIVELES_RUBRICA.map((n, i) => ({ nombre: n.nombre, min: n.min, max: n.max, desc: descs[i] || '' }));
+  const existente = id ? Store.merged('RubricaCriterios').find(x => x.id === id) : null;
+  const row = existente
+    ? Object.assign({}, existente, { nombre, niveles: JSON.stringify(niveles) })
+    : { id: uid(), nombre, niveles: JSON.stringify(niveles), orden: criteriosRubricaActivos().length + 1, activo: true };
+  Store.upsertLocal('RubricaCriterios', row);
+  Store.enqueue('RubricaCriterios', row);
+  Store.persist();
+  scheduleSyncPending();
+  closeModal();
+  toast('Criterio guardado');
+  renderCurrentView();
+}
+function confirmarEliminarCriterio(id) {
+  const c = Store.merged('RubricaCriterios').find(x => x.id === id);
+  openModal(`<h2>Eliminar criterio</h2><p>¿Eliminar <strong>${esc(c ? c.nombre : '')}</strong>? Las calificaciones ya puestas con este criterio en algún equipo se quedan guardadas, pero dejarán de contar en futuros promedios.</p>
+    <div class="row"><button class="btn secondary block" onclick="closeModal()">Cancelar</button><button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="eliminarCriterioRubrica('${id}')">Eliminar</button></div>`);
+}
+function eliminarCriterioRubrica(id) {
+  const c = Store.merged('RubricaCriterios').find(x => x.id === id);
+  if (c) {
+    const row = Object.assign({}, c, { activo: false });
+    Store.upsertLocal('RubricaCriterios', row);
+    Store.enqueue('RubricaCriterios', row);
+    Store.persist();
+    scheduleSyncPending();
+  }
+  closeModal();
+  toast('Criterio eliminado');
+  renderCurrentView();
+}
+function confirmarRestaurarCriterios() {
+  openModal(`<h2>Restaurar criterios</h2><p>Esto reemplaza tu lista actual de criterios por los 6 originales de la rúbrica. Las calificaciones que ya hayas puesto no se borran, pero quedarán ligadas a criterios que ya no aparecerán activos.</p>
+    <div class="row"><button class="btn secondary block" onclick="closeModal()">Cancelar</button><button class="btn block" style="background:var(--danger); border-color:var(--danger);" onclick="restaurarCriteriosDefault()">Restaurar</button></div>`);
+}
+function restaurarCriteriosDefault() {
+  // Desactiva los actuales (no se borran, por si ya tienen calificaciones puestas) y crea los 6 de base.
+  criteriosRubricaActivos().forEach(c => {
+    const row = Object.assign({}, c, { activo: false });
+    Store.upsertLocal('RubricaCriterios', row);
+    Store.enqueue('RubricaCriterios', row);
+  });
+  criteriosRubricaDefault().forEach((c, i) => {
+    const row = { id: uid(), nombre: c.nombre, niveles: JSON.stringify(c.niveles), orden: i + 1, activo: true };
+    Store.upsertLocal('RubricaCriterios', row);
+    Store.enqueue('RubricaCriterios', row);
+  });
+  Store.persist();
+  scheduleSyncPending();
+  closeModal();
+  toast('Criterios restaurados a los 6 originales');
+  renderCurrentView();
 }
 
 /* ---------------- IMPORTAR (CSV / Excel exportado + OCR con cámara) ---------------- */
