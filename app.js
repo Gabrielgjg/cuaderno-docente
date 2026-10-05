@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v45'
+  APP_VERSION: 'v46'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -75,12 +75,12 @@ function tarjetaHorarioActual() {
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
+  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
   // Estructura vacía completa: se usa al recibir datos del servidor, para que una
   // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
   emptyData() {
-    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [] };
+    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] };
   },
 
   load() {
@@ -250,6 +250,16 @@ async function syncPending(manual) {
       const res = await jsonp('savePlaneacionCarpeta', { data: JSON.stringify(pl) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la carpeta de planeaciones');
       Store.queue.Planeaciones = Store.queue.Planeaciones.filter(x => x !== pl);
+    }
+    for (const rc of Store.queue.RubricaCriterios.slice()) {
+      const res = await jsonp('saveRubricaCriterio', { data: JSON.stringify(rc) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el criterio de la rúbrica');
+      Store.queue.RubricaCriterios = Store.queue.RubricaCriterios.filter(x => x !== rc);
+    }
+    for (const rv of Store.queue.RubricaValores.slice()) {
+      const res = await jsonp('saveRubricaValor', { data: JSON.stringify(rv) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la calificación de la rúbrica');
+      Store.queue.RubricaValores = Store.queue.RubricaValores.filter(x => x !== rv);
     }
     // Proyectos: en orden (proyecto → equipos → sesiones → notas). Cada elemento se
     // quita de la cola solo cuando el servidor confirma, para no perder nada si se corta.
@@ -1162,6 +1172,7 @@ function califVistaProyectos(grupo) {
           <strong style="cursor:pointer;" onclick="modalEquipo('${e.id}')">${esc(e.nombre)} ✎</strong>
         </div>
         <div class="muted" style="font-size:.72rem;">${ints.length} integrante(s)</div>
+        <button class="btn small ghost" style="margin-top:4px; padding:3px 8px; font-size:.72rem;" onclick="abrirRubricaEquipo('${e.id}')">📋 Rúbrica${promedioRubrica(e.id) !== null ? ` · ${promedioRubrica(e.id).toFixed(1)}` : ''}</button>
         ${cerrado ? '' : `
           <div style="margin-top:6px; font-size:.8rem;">
             ${ints.map(id => `<div class="row between" style="gap:6px; padding:2px 0;">
@@ -1556,6 +1567,110 @@ function abrirModalPlaneaciones(grupo, estado, error, archivos) {
   }
   openModal(`<h2>Planeaciones · ${esc(grupo.asignatura)}</h2>${cuerpo}`);
 }
+/* ---------------- Rúbrica de equipos (heteroevaluación) ----------------
+   Vive dentro de cada equipo en Proyectos. Por ahora el promedio es solo
+   de referencia — NO alimenta la calificación de Proyectos todavía, porque
+   faltan los elementos de autoevaluación y coevaluación para que la nota
+   final esté completa (se puede ligar más adelante, cuando existan). */
+const NIVELES_RUBRICA = [
+  { nombre: 'Muy Bien', min: 10, max: 10 },
+  { nombre: 'Bien', min: 8, max: 9 },
+  { nombre: 'Suficiente', min: 6, max: 7 },
+  { nombre: 'Insuficiente', min: 5, max: 5 }
+];
+function criteriosRubricaDefault() {
+  const datos = [
+    ['Calidad de Información', ['Información completa, veraz y con fuentes claras.', 'Información correcta, aunque falta profundizar.', 'Información básica y algo superficial.', 'Información errónea o incompleta.']],
+    ['Explicación', ['Dominio total. Explica con sus propias palabras.', 'Explica bien, pero depende de leer notas.', 'Muestra inseguridad en conceptos clave.', 'Se limita a leer material de apoyo.']],
+    ['Organización', ['Estructura lógica: inicio, desarrollo y cierre.', 'Estructura clara pero transiciones bruscas.', 'Presentación algo desordenada.', 'Sin orden ni coherencia.']],
+    ['Exposición Oral', ['Excelente volumen, dicción y contacto visual.', 'Buen volumen, contacto visual intermitente.', 'Voz baja. Lee mucho y no mira al grupo.', 'No se escucha o evita contacto visual.']],
+    ['Letra e Imágenes', ['Letra legible. Imágenes claras y útiles.', 'Letra legible, imágenes con poca nitidez.', 'Letra difícil de leer o imágenes poco relacionadas.', 'Letra muy pequeña o sin imágenes.']],
+    ['Trabajo Terminado', ['Trabajo completo, entregado a tiempo y con todos los elementos solicitados.', 'Trabajo completo, pero con detalles menores sin terminar o con poco retraso.', 'Trabajo incompleto: faltan elementos importantes.', 'No se entregó o está muy incompleto.']]
+  ];
+  return datos.map(([nombre, descs]) => ({
+    nombre,
+    niveles: NIVELES_RUBRICA.map((n, i) => ({ nombre: n.nombre, min: n.min, max: n.max, desc: descs[i] }))
+  }));
+}
+function criteriosRubricaActivos() {
+  return Store.merged('RubricaCriterios').filter(c => c.activo !== false && c.activo !== 'FALSE')
+    .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0));
+}
+function valoresRubricaDe(equipoId) { return Store.merged('RubricaValores').filter(v => v.equipoId === equipoId); }
+function promedioRubrica(equipoId) {
+  const vals = valoresRubricaDe(equipoId).map(v => Number(v.valor));
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+function rangoPuntos(min, max) { const out = []; for (let v = Number(min); v <= Number(max); v++) out.push(v); return out; }
+function textoPromedioRubrica(valores, totalCriterios) {
+  if (!valores.length) return `— · 0 de ${totalCriterios} evaluados`;
+  const prom = valores.reduce((s, v) => s + Number(v.valor), 0) / valores.length;
+  return `${prom.toFixed(1)} · ${valores.length} de ${totalCriterios} evaluados`;
+}
+function abrirRubricaEquipo(equipoId) {
+  const equipo = Store.merged('ProyectoEquipos').find(e => e.id === equipoId);
+  if (!equipo) return;
+  const criterios = criteriosRubricaActivos();
+  if (!criterios.length) {
+    openModal(`<h2>Rúbrica</h2><p class="muted">Aún no hay criterios configurados.</p>
+      <button class="btn small secondary" onclick="closeModal(); goTo('admin'); adminTab='rubrica'; renderCurrentView();">Configurar en Admin</button>`);
+    return;
+  }
+  const valores = valoresRubricaDe(equipoId);
+  const valorDe = (critId) => { const v = valores.find(x => x.criterioId === critId); return v ? Number(v.valor) : null; };
+  openModal(`
+    <h2>Rúbrica · ${esc(equipo.nombre)}</h2>
+    <div id="rubricaCuerpo">${criterios.map(c => filaCriterioRubrica(c, equipoId, valorDe(c.id))).join('')}</div>
+    <div class="card-flat row between" style="margin-top:10px;"><strong>Promedio</strong><span id="rubricaPromedio" class="tag">${textoPromedioRubrica(valores, criterios.length)}</span></div>
+    <div class="field" style="margin-top:10px;"><label>Notas y observaciones</label>
+      <textarea id="rubricaNotas" placeholder="Comentarios adicionales…">${esc(equipo.notasRubrica || '')}</textarea>
+    </div>
+    <button class="btn block" onclick="guardarNotasRubrica('${equipoId}')">Guardar y cerrar</button>
+  `);
+}
+function filaCriterioRubrica(criterio, equipoId, valorActual) {
+  let niveles = [];
+  try { niveles = JSON.parse(criterio.niveles || '[]'); } catch (e) {}
+  return `<div class="card-flat" data-criterio="${criterio.id}">
+    <strong>${esc(criterio.nombre)}</strong>
+    ${niveles.map(n => `<div class="row between" style="margin-top:6px; gap:8px; align-items:flex-start;">
+        <span class="muted small" style="flex:1;"><strong>${esc(n.nombre)} (${n.min === n.max ? n.min : n.min + '–' + n.max}):</strong> ${esc(n.desc || '')}</span>
+        <div class="row" style="gap:4px; flex-shrink:0;">
+          ${rangoPuntos(n.min, n.max).map(v => `<button class="btn small ${valorActual === v ? '' : 'ghost'}" style="min-width:34px; padding:6px 4px;" onclick="guardarValorRubrica('${equipoId}','${criterio.id}',${v},this)">${v}</button>`).join('')}
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+function guardarValorRubrica(equipoId, criterioId, valor, btn) {
+  const existente = Store.merged('RubricaValores').find(v => v.equipoId === equipoId && v.criterioId === criterioId);
+  const row = { id: existente ? existente.id : uid(), equipoId, criterioId, valor };
+  Store.upsertLocal('RubricaValores', row);
+  Store.enqueue('RubricaValores', row);
+  Store.persist();
+  scheduleSyncPending();
+  // Refresca solo lo necesario dentro del modal abierto (sin repintar toda la pantalla de atrás)
+  const fila = btn.closest('[data-criterio]');
+  if (fila) fila.querySelectorAll('button').forEach(b => b.classList.add('ghost'));
+  btn.classList.remove('ghost');
+  const criterios = criteriosRubricaActivos();
+  const valores = valoresRubricaDe(equipoId);
+  const prom = document.getElementById('rubricaPromedio');
+  if (prom) prom.textContent = textoPromedioRubrica(valores, criterios.length);
+}
+function guardarNotasRubrica(equipoId) {
+  const equipo = Store.merged('ProyectoEquipos').find(e => e.id === equipoId);
+  if (!equipo) { closeModal(); return; }
+  const campo = document.getElementById('rubricaNotas');
+  const row = Object.assign({}, equipo, { notasRubrica: campo ? campo.value : (equipo.notasRubrica || '') });
+  Store.upsertLocal('ProyectoEquipos', row);
+  Store.enqueue('ProyectoEquipos', row);
+  Store.persist();
+  scheduleSyncPending();
+  closeModal();
+  toast('Rúbrica guardada');
+  renderCurrentView();
+}
+
 function selectChip(el) {
   el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
