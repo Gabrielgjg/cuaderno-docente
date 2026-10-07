@@ -140,6 +140,10 @@
   .empty .mark-big{width:34px;height:34px;border-radius:8px;background:var(--accent-soft); margin:0 auto 14px; transform:rotate(45deg);}
 
   table{width:100%; border-collapse:collapse; font-size:.88rem;}
+  /* Encabezado que se queda fijo al bajar por una cuadrícula larga (copia del real, ver prepararEncabezadosFijos) */
+  .encab-flotante{position:fixed; z-index:15; display:none; overflow:hidden; background:var(--paper); box-shadow:0 3px 8px rgba(38,53,68,.16); touch-action:pan-y;}
+  .encab-flotante table{margin:0; table-layout:fixed;}
+  .encab-flotante th{background:var(--paper);}
   th,td{text-align:left; padding:8px 6px; border-bottom:1px solid var(--line);}
   th{color:var(--ink-soft); font-weight:600; font-size:.75rem; text-transform:none;}
 
@@ -163,7 +167,7 @@
   @media(min-width:640px){ .chart-box{height:280px;} }
 
   @media print{
-    .bottomnav, .topbar, .btn, .sync-dot, .no-print{display:none !important;}
+    .bottomnav, .topbar, .btn, .sync-dot, .no-print, .encab-flotante{display:none !important;}
     body{background:#fff;}
     #app{padding-bottom:0;}
     .view{padding:0;}
