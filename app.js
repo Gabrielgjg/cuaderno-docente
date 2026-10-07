@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v46'
+  APP_VERSION: 'v48'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -536,7 +536,67 @@ const chartInstances = {};
 function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
 const CHART_COLORS = { Presente: '#4C7A5E', Ausente: '#B5533C', Retardo: '#C48A34', Justificado: '#5B7EA6', accent: '#2F4A3D', line: '#DAD0BC' };
 
+/* ---------- Encabezado fijo en las cuadrículas largas ----------
+   Al bajar por la lista de alumnos, los nombres de las actividades (Calificaciones) o las
+   fechas (Asistencia) se quedan fijos debajo de la barra superior. Se logra con una COPIA del
+   encabezado que solo se muestra cuando el real ya salió de la pantalla: se mueve de lado junto
+   con la tabla y el toque en una actividad sigue abriendo su edición. (Un encabezado "sticky"
+   normal no funciona aquí porque la tabla tiene su propio desplazamiento horizontal.) */
+function prepararEncabezadosFijos() {
+  document.querySelectorAll('.tabla-fija').forEach(wrap => {
+    const previo = wrap.previousElementSibling;
+    if (previo && previo.classList.contains('encab-flotante')) return;
+    const thead = wrap.querySelector('thead');
+    if (!thead) return;
+    const flot = document.createElement('div');
+    flot.className = 'encab-flotante';
+    flot.setAttribute('aria-hidden', 'true');
+    const t = document.createElement('table');
+    t.appendChild(thead.cloneNode(true));
+    flot.appendChild(t);
+    wrap.parentNode.insertBefore(flot, wrap);
+  });
+  actualizarEncabezadosFijos();
+}
+function actualizarEncabezadosFijos() {
+  const barra = document.querySelector('.topbar');
+  const tope = barra ? barra.getBoundingClientRect().bottom : 0;
+  document.querySelectorAll('.encab-flotante').forEach(flot => {
+    const wrap = flot.nextElementSibling;
+    const tabla = wrap && wrap.querySelector('table');
+    const thead = tabla && tabla.querySelector('thead');
+    if (!thead) { flot.style.display = 'none'; return; }
+    const rw = wrap.getBoundingClientRect();
+    const rh = thead.getBoundingClientRect();
+    // Solo se ve mientras el encabezado real quedó arriba de la pantalla y aún queda tabla por ver
+    if (!(rh.top < tope && rw.bottom > tope + rh.height + 24)) { flot.style.display = 'none'; return; }
+    const orig = thead.querySelectorAll('th');
+    const anchos = Array.prototype.map.call(orig, th => th.getBoundingClientRect().width);   // primero se lee…
+    const ancho = tabla.offsetWidth;
+    flot.style.display = 'block';                                                            // …y luego se escribe
+    flot.style.top = tope + 'px';
+    flot.style.left = rw.left + 'px';
+    flot.style.width = rw.width + 'px';
+    flot.firstElementChild.style.width = ancho + 'px';
+    flot.querySelectorAll('th').forEach((th, i) => {
+      if (anchos[i] === undefined) return;
+      th.style.width = th.style.minWidth = th.style.maxWidth = anchos[i] + 'px';
+    });
+    flot.scrollLeft = wrap.scrollLeft;
+  });
+}
+let _encabPendiente = false;
+function programarEncabezadosFijos() {
+  if (_encabPendiente) return;
+  _encabPendiente = true;
+  requestAnimationFrame(() => { _encabPendiente = false; actualizarEncabezadosFijos(); });
+}
+if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', programarEncabezadosFijos);
+// Los eventos "scroll" no suben por el DOM: se escuchan en captura para enterarse también del desplazamiento lateral de la tabla.
+if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('scroll', programarEncabezadosFijos, { capture: true, passive: true });
+
 function postRenderHooks() {
+  prepararEncabezadosFijos();
   if (currentView === 'dashboard' && ctx.grupoId) renderDashboardCharts();
   if (currentView === 'admin' && typeof adminTab !== 'undefined' && adminTab === 'perfil' && typeof perfilAlumnoId !== 'undefined' && perfilAlumnoId) {
     if (typeof renderPerfilChart === 'function') renderPerfilChart();
@@ -692,7 +752,7 @@ function viewAsistenciaGrid() {
       <button class="btn small ghost" onclick="asistSemanaInicio=sumarDias(asistSemanaInicio,7); renderCurrentView();">Siguiente →</button>
     </div>
     <p class="muted" style="text-align:center; font-size:.8rem;">Toca una celda para cambiar el estatus (vacío → P → A → R → J → vacío)</p>
-    <div style="overflow-x:auto; margin-top:8px;">
+    <div class="tabla-fija" style="overflow-x:auto; margin-top:8px;">
     <table style="min-width:480px;">
       <thead><tr>
         <th style="position:sticky; left:0; background:var(--paper); min-width:140px;">Alumno</th>
@@ -921,7 +981,7 @@ function califVistaGrid(grupo, rubros) {
   });
 
   return formNueva + `
-    <div style="overflow-x:auto; margin-top:10px;">
+    <div class="tabla-fija" style="overflow-x:auto; margin-top:10px;">
     <table style="min-width:${360 + actividades.length * 84}px;">
       <thead><tr>
         <th style="position:sticky; left:0; background:var(--paper); min-width:140px;">Alumno</th>
@@ -1596,7 +1656,11 @@ function criteriosRubricaActivos() {
   return Store.merged('RubricaCriterios').filter(c => c.activo !== false && c.activo !== 'FALSE')
     .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0));
 }
-function valoresRubricaDe(equipoId) { return Store.merged('RubricaValores').filter(v => v.equipoId === equipoId); }
+// Solo cuentan los valores de criterios ACTIVOS (un criterio eliminado deja de contar; sus valores no se borran).
+function valoresRubricaDe(equipoId) {
+  const activos = new Set(criteriosRubricaActivos().map(c => c.id));
+  return Store.merged('RubricaValores').filter(v => v.equipoId === equipoId && activos.has(v.criterioId));
+}
 function promedioRubrica(equipoId) {
   const vals = valoresRubricaDe(equipoId).map(v => Number(v.valor));
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
