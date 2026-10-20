@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v49'
+  APP_VERSION: 'v50'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -76,7 +76,7 @@ function tarjetaHorarioActual() {
    --------------------------------------------------------------- */
 const Store = {
   data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
-  queue: { Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
+  queue: { Borrar: [], Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
   // Estructura vacía completa: se usa al recibir datos del servidor, para que una
   // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
   emptyData() {
@@ -183,11 +183,24 @@ async function refreshFromServer() {
     const res = await jsonp('getAll');
     if (res && res.ok) {
       Store.data = Object.assign({}, Store.emptyData(), res.data);
+      // Lo que se borró aquí y el servidor aún no confirma NO debe reaparecer al actualizar
+      (Store.queue.Borrar || []).forEach(b => { if (Store.data[b.hoja]) Store.data[b.hoja] = Store.data[b.hoja].filter(r => r.id !== b.id); });
       Store.persist();
       toast('Datos actualizados');
       renderCurrentViewSafe();
     }
   } catch (e) { /* seguimos con lo local */ }
+}
+
+// Un borrado se manda al servidor con reintento: si no hay internet queda pendiente (sobrevive a cerrar la app y a
+// "actualizar") y se confirma después. Antes se mandaba una sola vez y, si fallaba, el dato reaparecía.
+const ACCION_BORRADO = { Calificaciones: 'deleteCalificacion', Actividades: 'deleteActividad', Asistencia: 'deleteAsistencia',
+  Diario: 'deleteDiario', Diagnosticos: 'deleteDiagnostico', Horario: 'deleteHorario' };
+function borrarConReintento(hoja, id) {
+  if (!Store.queue.Borrar) Store.queue.Borrar = [];
+  if (!Store.queue.Borrar.some(b => b.hoja === hoja && b.id === id)) Store.queue.Borrar.push({ hoja, id });
+  Store.persist();
+  scheduleSyncPending();
 }
 
 async function syncPending(manual) {
@@ -198,6 +211,13 @@ async function syncPending(manual) {
   updateSyncDot();
   const CHUNK_SIZE = 15; // evita URLs demasiado largas en el JSONP
   try {
+    // Primero los borrados pendientes (el servidor ignora el que ya no exista, así que repetirlos es seguro)
+    for (const b of (Store.queue.Borrar || []).slice()) {
+      const res = await jsonp(ACCION_BORRADO[b.hoja], { id: b.id });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó un borrado');
+      Store.queue.Borrar = Store.queue.Borrar.filter(x => x !== b);
+      Store.persist();
+    }
     const categorias = [
       { key: 'Asistencia', campo: 'asistencia' },
       { key: 'Calificaciones', campo: 'calificaciones' },
@@ -477,20 +497,14 @@ function viewDashboardGrupo() {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const riesgo = alumnosEnRiesgo(ctx.grupoId);
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
-  const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
 
   const informe = alumnos.map(a => {
-    let final = 0;
-    if (rubros.length) {
-      rubros.forEach(r => {
-        const vals = calRows.filter(c => c.alumnoId === a.id && c.rubro === r.rubro).map(c => Number(c.valor));
-        if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
-      });
-    }
+    const final = acumuladoAlumno(a.id, rubros, vigentes).final;
     const asis = contarAsistencia(a.id, ctx.grupoId);
     const totalAsis = asis.Presente + asis.Ausente + asis.Retardo + asis.Justificado;
     const pctAsis = totalAsis ? Math.round((asis.Presente / totalAsis) * 100) : null;
-    return { nombre: a.nombre, final: rubros.length ? final.toFixed(1) : '—', pctAsis: pctAsis === null ? '—' : pctAsis + '%' };
+    return { nombre: a.nombre, final: rubros.length ? fmtNota(final) : '—', pctAsis: pctAsis === null ? '—' : pctAsis + '%' };
   });
 
   return `
@@ -635,10 +649,11 @@ function renderDashboardCharts() {
   const elE = document.getElementById('chartEntregas');
   if (elE) {
     destroyChart('chartEntregas');
-    const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+    const vigentesE = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+    const idsAlumnos = new Set(alumnos.map(a => a.id));
     const pcts = rubros.map(r => {
       if (alumnos.length === 0) return 0;
-      const entregaron = new Set(calRows.filter(c => c.rubro === r.rubro).map(c => c.alumnoId)).size;
+      const entregaron = new Set(vigentesE.filter(c => c.rubro === r.rubro && idsAlumnos.has(c.alumnoId)).map(c => c.alumnoId)).size;
       return Math.round((entregaron / alumnos.length) * 100);
     });
     chartInstances.chartEntregas = new Chart(elE, {
@@ -649,7 +664,7 @@ function renderDashboardCharts() {
   }
 
   // 3. Distribución de calificaciones por rubro (cuántos 10, 9, 8...)
-  const calRowsTrimestre = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const calRowsTrimestre = calificacionesVigentes(ctx.grupoId, ctx.trimestre).filter(c => alumnos.some(a => a.id === c.alumnoId));
   const buckets = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
   rubros.forEach((r, i) => {
     const elR = document.getElementById(`chartRubroDist-${i}`);
@@ -669,15 +684,11 @@ function renderDashboardCharts() {
   if (elD) {
     destroyChart('chartDistribucion');
     let aprobado = 0, reprobado = 0, sinCalificar = 0;
+    const vigentesD = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
     alumnos.forEach(a => {
-      const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === a.id && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-      if (calRows.length === 0) { sinCalificar++; return; }
-      let final = 0;
-      rubros.forEach(r => {
-        const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
-        if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
-      });
-      if (final >= 6) aprobado++; else reprobado++;
+      const acum = acumuladoAlumno(a.id, rubros, vigentesD);
+      if (!acum.tieneCalif) { sinCalificar++; return; }
+      if (notaRedondeada(acum.final) >= 6) aprobado++; else reprobado++;   // mismo número que se muestra
     });
     chartInstances.chartDistribucion = new Chart(elD, {
       type: 'doughnut',
@@ -783,7 +794,7 @@ function ciclarAsistenciaCelda(alumnoId, fecha, el) {
       Store.data.Asistencia = Store.data.Asistencia.filter(r => r.id !== registro.id);
       Store.queue.Asistencia = Store.queue.Asistencia.filter(r => r.id !== registro.id);
       Store.persist();
-      jsonp('deleteAsistencia', { id: registro.id }).catch(() => {});
+      borrarConReintento('Asistencia', registro.id);
     }
     el.textContent = '·'; el.classList.remove('on'); el.dataset.s = '';
     return;
@@ -918,10 +929,52 @@ function guardarUnaAsistencia(alumnoId, estatus, item) {
    ================================================================ */
 let califVista = 'grid';
 function abrevRubro(rubro) { return (rubro || '').trim().slice(0, 2).toUpperCase(); }
-function actividadesDe(grupo) {
+function actividadVigente(x) { return x.activo !== false && x.activo !== 'FALSE'; }
+function actividadesVigentesDe(grupo, trimestre) {
   return Store.merged('Actividades')
-    .filter(x => x.grupoId === grupo.id && x.asignatura === grupo.asignatura && x.trimestre === ctx.trimestre && x.activo !== false)
+    .filter(x => x.grupoId === grupo.id && x.asignatura === grupo.asignatura && x.trimestre === trimestre && actividadVigente(x))
     .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
+}
+function actividadesDe(grupo) { return actividadesVigentesDe(grupo, ctx.trimestre); }
+
+/* ---------------- Qué calificaciones cuentan en el promedio ----------------
+   SOLO cuentan las que están en la cuadrícula: ligadas a una actividad que existe en ese grupo y
+   trimestre, con un valor de 0 a 10, y una por celda (si una celda quedó repetida, la última, que es
+   la que se ve). Lo demás (capturas de la vista "Por alumno" que ya no existe, de actividades borradas,
+   repetidas, vacías o dañadas) NO entra en ningún promedio, aunque siga guardado en el Sheet.
+   El rubro es el de la actividad. Esta es la ÚNICA regla: cuadrícula, Panorama, Perfil y gráficas la usan. */
+function calificacionesVigentes(grupoId, trimestre) {
+  const grupo = Store.data.Grupos.find(g => g.id === grupoId);
+  if (!grupo) return [];
+  const acts = new Map(actividadesVigentesDe(grupo, trimestre).map(x => [x.id, x]));
+  const porCelda = new Map();
+  Store.merged('Calificaciones').forEach(c => {
+    if (c.grupoId !== grupoId || c.trimestre !== trimestre) return;
+    const act = acts.get(c.actividadId);
+    if (!act) return;                                                   // sin actividad, o la actividad ya no existe
+    const v = Number(c.valor);
+    if (c.valor === '' || c.valor === null || c.valor === undefined || !isFinite(v) || v < 0 || v > 10) return;   // vacío, texto o fuera de 0 a 10
+    porCelda.set(c.alumnoId + '|' + c.actividadId, { id: c.id, alumnoId: c.alumnoId, actividadId: c.actividadId, rubro: act.rubro, valor: v });
+  });
+  return [...porCelda.values()];
+}
+// Filas de este grupo y trimestre que NO cuentan (para avisarlo; no se borran)
+function calificacionesNoContadas(grupoId, trimestre) {
+  const contadas = new Set(calificacionesVigentes(grupoId, trimestre).map(c => c.id));
+  return Store.merged('Calificaciones').filter(c => c.grupoId === grupoId && c.trimestre === trimestre && !contadas.has(c.id));
+}
+// Un solo redondeo para MOSTRAR y para decidir aprobado/reprobado (antes 5.96 se mostraba 6.0 pero contaba como reprobado)
+function notaRedondeada(f) { return Math.round(f * 10) / 10; }
+function fmtNota(f) { return notaRedondeada(f).toFixed(1); }
+function acumuladoAlumno(alumnoId, rubros, vigentes) {
+  let final = 0;
+  const detalle = rubros.map(r => {
+    const vals = vigentes.filter(c => c.alumnoId === alumnoId && c.rubro === r.rubro).map(c => c.valor);
+    const promedio = vals.length ? vals.reduce((t, v) => t + v, 0) / vals.length : null;
+    if (promedio !== null) final += promedio * (Number(r.porcentaje) / 100);
+    return { rubro: r.rubro, porcentaje: Number(r.porcentaje), n: vals.length, promedio };
+  });
+  return { final, detalle, tieneCalif: detalle.some(d => d.n > 0) };
 }
 function viewCalificaciones() {
   if (!ctx.grupoId) return `<div class="empty"><p class="muted">Selecciona un grupo arriba.</p></div>`;
@@ -950,6 +1003,10 @@ function califVistaGrid(grupo, rubros) {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const actividades = actividadesDe(grupo);
   const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
+  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+  const noContadas = calificacionesNoContadas(ctx.grupoId, ctx.trimestre).length;
+  const avisoNoContadas = noContadas
+    ? `<p class="muted small" style="margin:6px 2px;">ℹ️ Hay ${noContadas} calificación(es) antigua(s) o inválida(s) en este grupo y trimestre (sin actividad, repetidas o fuera de 0–10) que <strong>no cuentan</strong> en el promedio.</p>` : '';
 
   const formNueva = `
     <div class="card">
@@ -971,16 +1028,9 @@ function califVistaGrid(grupo, rubros) {
   }
 
   const finalPorAlumno = {};
-  alumnos.forEach(a => {
-    let final = 0;
-    rubros.forEach(r => {
-      const vals = calRows.filter(c => c.alumnoId === a.id && c.rubro === r.rubro).map(c => Number(c.valor));
-      if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
-    });
-    finalPorAlumno[a.id] = final;
-  });
+  alumnos.forEach(a => { finalPorAlumno[a.id] = acumuladoAlumno(a.id, rubros, vigentes).final; });
 
-  return formNueva + `
+  return formNueva + avisoNoContadas + `
     <div class="tabla-fija" style="overflow-x:auto; margin-top:10px;">
     <table style="min-width:${360 + actividades.length * 84}px;">
       <thead><tr>
@@ -999,7 +1049,7 @@ function califVistaGrid(grupo, rubros) {
               style="width:52px; padding:6px; border:1px solid var(--line); border-radius:6px; text-align:center;"
               onchange="guardarCeldaCalificacion(this)"></td>`;
           }).join('')}
-          <td style="text-align:center;"><strong data-promedio="${a.id}">${finalPorAlumno[a.id].toFixed(1)}</strong></td>
+          <td style="text-align:center;"><strong data-promedio="${a.id}">${fmtNota(finalPorAlumno[a.id])}</strong></td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -1090,10 +1140,8 @@ async function eliminarActividad(id) {
   Store.persist();
   closeModal();
   toast('Actividad eliminada');
-  try {
-    for (const c of relacionadas) await jsonp('deleteCalificacion', { id: c.id });
-    await jsonp('deleteActividad', { id });
-  } catch (e) { /* se puede reintentar más tarde */ }
+  relacionadas.forEach(c => borrarConReintento('Calificaciones', c.id));
+  borrarConReintento('Actividades', id);
   renderCurrentView();
 }
 function guardarCeldaCalificacion(input) {
@@ -1107,7 +1155,7 @@ function guardarCeldaCalificacion(input) {
       Store.data.Calificaciones = Store.data.Calificaciones.filter(c => c.id !== regId);
       Store.queue.Calificaciones = Store.queue.Calificaciones.filter(c => c.id !== regId);
       Store.persist();
-      jsonp('deleteCalificacion', { id: regId }).catch(() => {});
+      borrarConReintento('Calificaciones', regId);
       input.dataset.reg = '';
       actualizarPromedioAlumno(alumnoId, grupo);
     }
@@ -1134,13 +1182,7 @@ function actualizarPromedioAlumno(alumnoId, grupo) {
   const el = document.querySelector(`[data-promedio="${alumnoId}"]`);
   if (!el || !grupo) return;
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
-  const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === alumnoId && c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-  let final = 0;
-  rubros.forEach(r => {
-    const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
-    if (vals.length) final += (vals.reduce((s, v) => s + v, 0) / vals.length) * (Number(r.porcentaje) / 100);
-  });
-  el.textContent = final.toFixed(1);
+  el.textContent = fmtNota(acumuladoAlumno(alumnoId, rubros, calificacionesVigentes(ctx.grupoId, ctx.trimestre)).final);
 }
 
 /* ================================================================
@@ -1581,7 +1623,7 @@ async function eliminarDiario(id) {
   Store.persist();
   closeModal();
   toast('Entrada eliminada');
-  try { await jsonp('deleteDiario', { id }); } catch (e) {}
+  borrarConReintento('Diario', id);
   renderCurrentView();
 }
 
