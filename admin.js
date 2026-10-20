@@ -263,15 +263,10 @@ function renderPerfilDetalle(a) {
   const califHtml = grupo ? TRIMESTRES.map(tri => {
     const rubros = Store.encuadre(grupo.asignatura, tri);
     if (rubros.length === 0) return '';
-    const calRows = Store.merged('Calificaciones').filter(c => c.alumnoId === a.id && c.trimestre === tri);
-    let final = 0;
-    const detalle = rubros.map(r => {
-      const vals = calRows.filter(c => c.rubro === r.rubro).map(c => Number(c.valor));
-      const prom = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
-      if (vals.length) final += prom * (Number(r.porcentaje) / 100);
-      return `${esc(r.rubro)}: ${vals.length ? prom.toFixed(1) : '—'}`;
-    }).join(' · ');
-    return `<div class="card-flat row between"><span>${esc(tri)}<br><span class="muted" style="font-size:.78rem;">${detalle}</span></span><span class="tag">${final.toFixed(1)}</span></div>`;
+    // Misma regla que la cuadrícula y el Panorama: solo cuentan las calificaciones de la cuadrícula del grupo ACTUAL del alumno
+    const acum = acumuladoAlumno(a.id, rubros, calificacionesVigentes(grupo.id, tri));
+    const detalle = acum.detalle.map(d => `${esc(d.rubro)}: ${d.n ? fmtNota(d.promedio) : '—'}`).join(' · ');
+    return `<div class="card-flat row between"><span>${esc(tri)}<br><span class="muted" style="font-size:.78rem;">${detalle}</span></span><span class="tag">${fmtNota(acum.final)}</span></div>`;
   }).join('') : '<p class="muted">Este grupo no tiene asignatura/encuadre configurado.</p>';
 
   return `
@@ -464,7 +459,7 @@ function guardarDiagnostico(input) {
       Store.data.Diagnosticos = Store.data.Diagnosticos.filter(d => d.id !== regId);
       Store.queue.Diagnosticos = Store.queue.Diagnosticos.filter(d => d.id !== regId);
       Store.persist();
-      jsonp('deleteDiagnostico', { id: regId }).catch(() => {});
+      borrarConReintento('Diagnosticos', regId);
       item.dataset.reg = '';
     }
     return;
@@ -521,7 +516,7 @@ function guardarHorarioCelda(sel) {
       Store.data.Horario = Store.data.Horario.filter(h => h.id !== regId);
       Store.queue.Horario = Store.queue.Horario.filter(h => h.id !== regId);
       Store.persist();
-      jsonp('deleteHorario', { id: regId }).catch(() => {});
+      borrarConReintento('Horario', regId);
       sel.dataset.reg = '';
     }
     return;
