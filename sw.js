@@ -1,4 +1,4 @@
-const CACHE = 'cuaderno-docente-v50';
+const CACHE = 'cuaderno-docente-v51';
 const SHELL = ['./', './index.html', './app.js', './admin.js', './classroom.js', './chart.umd.js', './manifest.json', './icon-192.png', './icon-512.png', './icon.svg'];
 
 self.addEventListener('install', (e) => {
