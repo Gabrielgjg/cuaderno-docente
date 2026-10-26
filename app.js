@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v51'
+  APP_VERSION: 'v52'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -296,11 +296,6 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la actividad');
       Store.queue.Actividades = Store.queue.Actividades.filter(x => x !== act);
     }
-    for (const t of (Store.queue.Trimestres || []).slice()) {
-      const res = await jsonp('saveTrimestre', { data: JSON.stringify(t) });
-      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el calendario');
-      Store.queue.Trimestres = Store.queue.Trimestres.filter(x => x !== t);
-    }
     for (const d of Store.queue.Diagnosticos.slice()) {
       const res = await jsonp('saveDiagnostico', { data: JSON.stringify(d) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el diagnóstico');
@@ -341,6 +336,12 @@ async function syncPending(manual) {
         if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó ' + t.txt);
         Store.queue[t.hoja] = Store.queue[t.hoja].filter(x => x !== item);
       }
+    }
+    // El calendario va al final: si fallara, no debe impedir que se sincronice nada más
+    for (const t of (Store.queue.Trimestres || []).slice()) {
+      const res = await jsonp('saveTrimestre', { data: JSON.stringify(t) });
+      if (!res || !res.ok) throw new Error('No se pudo guardar el calendario de trimestres' + (res && res.error ? ': ' + res.error : ''));
+      Store.queue.Trimestres = Store.queue.Trimestres.filter(x => x !== t);
     }
     Store.persist();
     toast('Sincronizado ✓');
