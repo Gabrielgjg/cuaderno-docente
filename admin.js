@@ -10,6 +10,7 @@ function viewAdmin() {
     { id: 'alumnos', label: 'Alumnos' },
     { id: 'perfil', label: 'Perfil' },
     { id: 'encuadres', label: 'Encuadres' },
+    { id: 'trimestres', label: 'Trimestres' },
     { id: 'diagnostico', label: 'Diagnóstico' },
     { id: 'horario', label: 'Horario' },
     { id: 'planeaciones', label: 'Planeaciones' },
@@ -17,7 +18,7 @@ function viewAdmin() {
     { id: 'importar', label: 'Importar' },
     { id: 'config', label: 'Conexión' }
   ];
-  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, planeaciones: adminPlaneaciones, rubrica: adminRubrica, importar: adminImportar, config: adminConfig };
+  const fns = { grupos: adminGrupos, alumnos: adminAlumnos, perfil: adminPerfil, trimestres: adminTrimestres, encuadres: adminEncuadres, diagnostico: adminDiagnostico, horario: adminHorario, planeaciones: adminPlaneaciones, rubrica: adminRubrica, importar: adminImportar, config: adminConfig };
   return `
     <div class="chip-list no-print">
       ${tabs.map(t => `<span class="chip ${adminTab === t.id ? 'active' : ''}" onclick="adminTab='${t.id}'; renderCurrentView();">${t.label}</span>`).join('')}
@@ -277,7 +278,7 @@ function renderPerfilDetalle(a) {
       <p class="muted">${grupo ? `${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}` : 'Sin grupo'}${a.matricula ? ' · Matrícula: ' + esc(a.matricula) : ''}</p>
     </div>
 
-    <h3>Asistencia</h3>
+    <h3>Asistencia · ${esc(ctx.trimestre)}</h3>
     <div class="card row between">
       <div><div class="muted">Presente</div><h2 style="color:var(--ok);">${counts.Presente}</h2></div>
       <div><div class="muted">Ausente</div><h2 style="color:var(--danger);">${counts.Ausente}</h2></div>
@@ -286,6 +287,7 @@ function renderPerfilDetalle(a) {
       <div><div class="muted">%</div><h2>${totalAsist ? pct + '%' : '—'}</h2></div>
     </div>
     ${totalAsist ? `<div class="card chart-box"><canvas id="chartPerfilAsistencia"></canvas></div>` : ''}
+    ${perfilAsistenciaTabla(a)}
 
     <h3>Calificaciones</h3>
     ${(() => { const diag = Store.merged('Diagnosticos').find(d => d.alumnoId === a.id);
@@ -307,6 +309,23 @@ function renderPerfilDetalle(a) {
   `;
 }
 
+// Asistencia del alumno desglosada por trimestre y del ciclo completo
+function perfilAsistenciaTabla(a) {
+  const filas = TRIMESTRES.map(t => ({ etiqueta: t, c: contarAsistencia(a.id, a.grupoId, t), r: rangoTrimestre(t) }))
+    .concat([{ etiqueta: 'Ciclo completo', c: contarAsistencia(a.id, a.grupoId, 'CICLO'), r: null }]);
+  const sinTrimestres = resumenAsistenciaCache[a.grupoId] && (resumenAsistenciaVersion[a.grupoId] || 1) < 2;
+  return `<div class="card-flat">
+    <table><thead><tr><th>Periodo</th><th>P</th><th>A</th><th>R</th><th>J</th><th>%</th></tr></thead><tbody>
+    ${filas.map(f => {
+      const tot = f.c.Presente + f.c.Ausente + f.c.Retardo + f.c.Justificado;
+      return `<tr><td>${esc(f.etiqueta)}${f.r && f.r.inicio ? `<br><span class="muted" style="font-size:.7rem;">${fmtFechaCorta(f.r.inicio)} – ${fmtFechaCorta(f.r.finAsistencia)}</span>` : ''}</td>
+        <td>${f.c.Presente}</td><td>${f.c.Ausente}</td><td>${f.c.Retardo}</td><td>${f.c.Justificado}</td><td>${tot ? Math.round((f.c.Presente / tot) * 100) + '%' : '—'}</td></tr>`;
+    }).join('')}
+    </tbody></table>
+    ${sinTrimestres ? '<p class="muted" style="font-size:.74rem; margin:6px 0 0;">Tu servidor aún no separa la asistencia por trimestre (falta actualizar Apps Script): todas las filas muestran el acumulado del ciclo.</p>' : ''}
+  </div>`;
+}
+
 function renderPerfilChart() {
   const el = document.getElementById('chartPerfilAsistencia');
   if (!el || !perfilAlumnoId) return;
@@ -318,6 +337,54 @@ function renderPerfilChart() {
     data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: Object.keys(counts).map(k => CHART_COLORS[k]) }] },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
   });
+}
+
+/* ---------------- TRIMESTRES (calendario) ---------------- */
+function adminTrimestres() {
+  const cal = calendarioTrimestres();
+  const lbl = 'display:block; font-size:.75rem; color:var(--ink-soft);';
+  const inp = 'width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised);';
+  return `
+    <div class="card">
+      <h3 style="margin-top:0;">Calendario de trimestres · ciclo ${esc(CONFIG.CICLO)}</h3>
+      <p class="muted">La asistencia se cuenta por trimestre con estas fechas. <strong>Fin</strong> es el último día del trimestre para calificaciones; <strong>Última asistencia</strong> es el último día en que se pasa lista (puede ser posterior al fin, como en el tercer trimestre).</p>
+      ${cal.map(c => `
+        <div class="card-flat" data-tri="${esc(c.trimestre)}" data-id="${c.id || ''}">
+          <strong>${esc(c.trimestre)}</strong>
+          <div class="row" style="margin-top:6px; gap:8px; align-items:flex-end;">
+            <label style="flex:1;"><span style="${lbl}">Inicio</span><input type="date" class="tri-inicio" value="${esc(c.inicio)}" style="${inp}"></label>
+            <label style="flex:1;"><span style="${lbl}">Fin</span><input type="date" class="tri-fin" value="${esc(c.fin)}" style="${inp}"></label>
+            <label style="flex:1;"><span style="${lbl}">Última asistencia</span><input type="date" class="tri-asis" value="${esc(c.finAsistencia)}" style="${inp}"></label>
+          </div>
+        </div>`).join('')}
+      <button class="btn block" onclick="guardarTrimestres()">Guardar calendario</button>
+    </div>`;
+}
+function guardarTrimestres() {
+  const filas = [...document.querySelectorAll('[data-tri]')].map(el => ({
+    trimestre: el.dataset.tri, id: el.dataset.id || null,
+    inicio: el.querySelector('.tri-inicio').value, fin: el.querySelector('.tri-fin').value, finAsistencia: el.querySelector('.tri-asis').value
+  }));
+  for (const f of filas) {
+    if (!f.inicio || !f.fin) { toast(`${f.trimestre}: faltan el inicio o el fin`); return; }
+    if (!f.finAsistencia) f.finAsistencia = f.fin;
+    if (f.inicio > f.fin) { toast(`${f.trimestre}: el inicio es posterior al fin`); return; }
+    if (f.finAsistencia < f.fin) { toast(`${f.trimestre}: la última asistencia no puede ser antes del fin`); return; }
+  }
+  for (let i = 0; i < filas.length - 1; i++) {
+    if (filas[i].finAsistencia >= filas[i + 1].inicio) { toast(`${filas[i].trimestre} y ${filas[i + 1].trimestre} se traslapan: la asistencia del primero llega hasta el ${fmtFechaCorta(filas[i].finAsistencia)}`); return; }
+  }
+  filas.forEach(f => {
+    const row = { id: f.id || uid(), cicloEscolar: CONFIG.CICLO, trimestre: f.trimestre, inicio: f.inicio, fin: f.fin, finAsistencia: f.finAsistencia };
+    Store.upsertLocal('Trimestres', row);
+    Store.enqueue('Trimestres', row);
+  });
+  Store.persist();
+  // el calendario cambió: la asistencia por trimestre se vuelve a pedir al servidor
+  resumenAsistenciaCache = {}; resumenAsistenciaVersion = {}; resumenAsistenciaRangos = {}; resumenAsistenciaUltimoIntento = {};
+  toast('Calendario guardado');
+  scheduleSyncPending();
+  renderCurrentView();
 }
 
 /* ---------------- ENCUADRES ---------------- */function adminEncuadres() {
