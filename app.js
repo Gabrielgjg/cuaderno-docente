@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v50'
+  APP_VERSION: 'v51'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -23,6 +23,46 @@ const TIPOS_DIARIO = [
   { id: 'incidencia', label: 'Incidencia' }
 ];
 const TRIMESTRES = ['Trimestre 1', 'Trimestre 2', 'Trimestre 3'];
+
+/* ---------------- Calendario de trimestres ----------------
+   La asistencia solo guarda la fecha; el trimestre al que pertenece sale de estas fechas.
+   inicio..fin = el trimestre para calificaciones; finAsistencia = último día en que se pasa lista
+   (en el 3er trimestre los alumnos siguen asistiendo dos semanas después del fin).
+   Lo que se guarde en Admin › Trimestres (hoja "Trimestres") manda; esto es solo el valor de partida. */
+const CALENDARIO_DEFECTO = {
+  '2026-2027': {
+    'Trimestre 1': { inicio: '2026-10-01', fin: '2026-11-13' },
+    'Trimestre 2': { inicio: '2026-11-16', fin: '2027-03-05' },
+    'Trimestre 3': { inicio: '2027-03-08', fin: '2027-06-18', finAsistencia: '2027-07-02' }
+  }
+};
+function calendarioTrimestres() {
+  const guardados = Store.merged('Trimestres').filter(t => t.cicloEscolar === CONFIG.CICLO);
+  const base = CALENDARIO_DEFECTO[CONFIG.CICLO] || {};
+  return TRIMESTRES.map(tri => {
+    const g = guardados.filter(t => t.trimestre === tri).pop();
+    const d = base[tri] || {};
+    const inicio = (g && g.inicio) || d.inicio || '';
+    const fin = (g && g.fin) || d.fin || '';
+    const finAsistencia = (g && g.finAsistencia) || (g && g.fin) || d.finAsistencia || fin;
+    return { trimestre: tri, inicio, fin, finAsistencia, id: g ? g.id : null, guardado: !!g };
+  });
+}
+function rangoTrimestre(tri) { return calendarioTrimestres().find(c => c.trimestre === tri) || null; }
+function fechaEnRango(fecha, rango) { return !!(rango && rango.inicio && rango.finAsistencia && fecha >= rango.inicio && fecha <= rango.finAsistencia); }
+function trimestreDeFecha(iso) { const c = calendarioTrimestres().find(x => fechaEnRango(iso, x)); return c ? c.trimestre : null; }
+// El trimestre en curso: el que contiene hoy; entre trimestres (o en vacaciones) el último que ya empezó; antes del primero, el 1.
+function trimestreActual(hoy) {
+  hoy = hoy || todayISO();
+  const cal = calendarioTrimestres();
+  const dentro = cal.find(c => fechaEnRango(hoy, c));
+  if (dentro) return dentro.trimestre;
+  const iniciados = cal.filter(c => c.inicio && c.inicio <= hoy);
+  return iniciados.length ? iniciados[iniciados.length - 1].trimestre : TRIMESTRES[0];
+}
+function rangosParaServidor() { return calendarioTrimestres().filter(c => c.inicio && c.finAsistencia).map(c => ({ t: c.trimestre, d: c.inicio, h: c.finAsistencia })); }
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+function fmtFechaCorta(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? `${Number(m[3])} ${MESES_CORTOS[Number(m[2]) - 1]} ${m[1]}` : '—'; }
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
 const MODULOS = [
   { modulo: 1, inicio: '07:00', fin: '07:50' },
@@ -75,12 +115,12 @@ function tarjetaHorarioActual() {
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
-  queue: { Borrar: [], Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] },
+  queue: { Borrar: [], Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] },
   // Estructura vacía completa: se usa al recibir datos del servidor, para que una
   // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
   emptyData() {
-    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], RubricaCriterios: [], RubricaValores: [] };
+    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] };
   },
 
   load() {
@@ -256,6 +296,11 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó la actividad');
       Store.queue.Actividades = Store.queue.Actividades.filter(x => x !== act);
     }
+    for (const t of (Store.queue.Trimestres || []).slice()) {
+      const res = await jsonp('saveTrimestre', { data: JSON.stringify(t) });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el calendario');
+      Store.queue.Trimestres = Store.queue.Trimestres.filter(x => x !== t);
+    }
     for (const d of Store.queue.Diagnosticos.slice()) {
       const res = await jsonp('saveDiagnostico', { data: JSON.stringify(d) });
       if (!res || !res.ok) throw new Error((res && res.error) || 'el servidor no confirmó el diagnóstico');
@@ -393,7 +438,7 @@ const NAV = [
   { id: 'admin', label: 'Admin', icon: iconSettings }
 ];
 let currentView = 'dashboard';
-let ctx = { grupoId: null, fecha: todayISO(), asignatura: null, trimestre: TRIMESTRES[0] };
+let ctx = { grupoId: null, fecha: todayISO(), asignatura: null, trimestre: trimestreActual() };
 
 function iconHome(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>';}
 function iconCheck(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg>';}
@@ -408,7 +453,7 @@ function renderNav() {
       ${n.icon()}<span>${n.label}</span>
     </button>`).join('');
 }
-function goTo(id) { currentView = id; renderNav(); renderCurrentView(); }
+function goTo(id) { currentView = id; informeAbierto = false; renderNav(); renderCurrentView(); }
 function renderCurrentView() {
   const titles = { dashboard: 'Cuaderno Docente', asistencia: 'Pase de lista', calificaciones: 'Calificaciones', diario: 'Diario docente', clase: 'Herramientas de clase', admin: 'Administración' };
   document.getElementById('viewTitle').textContent = titles[currentView];
@@ -493,6 +538,7 @@ function viewDashboard() {
 function viewDashboardGrupo() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
+  if (informeAbierto) return viewInforme();
   ensureResumenAsistencia(ctx.grupoId);
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const riesgo = alumnosEnRiesgo(ctx.grupoId);
@@ -510,7 +556,8 @@ function viewDashboardGrupo() {
   return `
     <div class="row between no-print" style="margin-bottom:4px;">
       <span class="muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</span>
-      <button class="btn small secondary" onclick="window.print()">Imprimir / PDF</button>
+      <span class="row" style="gap:6px;"><button class="btn small" onclick="informeAbierto=true; renderCurrentView();">📄 Informe del trimestre</button>
+      <button class="btn small secondary" onclick="window.print()">Imprimir / PDF</button></span>
     </div>
     <div class="card-flat muted" style="display:none;" id="printHeader">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos · ${esc(ctx.trimestre)}</div>
     ${riesgo.length ? `
@@ -611,7 +658,7 @@ if (typeof document !== 'undefined' && document.addEventListener) document.addEv
 
 function postRenderHooks() {
   prepararEncabezadosFijos();
-  if (currentView === 'dashboard' && ctx.grupoId) renderDashboardCharts();
+  if (currentView === 'dashboard' && ctx.grupoId && !informeAbierto) renderDashboardCharts();
   if (currentView === 'admin' && typeof adminTab !== 'undefined' && adminTab === 'perfil' && typeof perfilAlumnoId !== 'undefined' && perfilAlumnoId) {
     if (typeof renderPerfilChart === 'function') renderPerfilChart();
   }
@@ -809,20 +856,39 @@ function ciclarAsistenciaCelda(alumnoId, fecha, el) {
   el.classList.add('on');
   el.dataset.s = nuevoEstatus;
 }
-function contarAsistencia(alumnoId, grupoId) {
+// En qué trimestre se cuenta la asistencia que se está viendo: en Asistencia/Diario el de la fecha elegida;
+// en Panorama, Calificaciones y Perfil el trimestre seleccionado.
+function triParaAsistencia() {
+  if (currentView === 'asistencia' || currentView === 'diario') return trimestreDeFecha(ctx.fecha) || ctx.trimestre;
+  return ctx.trimestre;
+}
+// tri = 'Trimestre N' | 'CICLO' (todo el ciclo). Sin tri: el que corresponde a la pantalla.
+function contarAsistencia(alumnoId, grupoId, tri) {
+  tri = tri || triParaAsistencia();
+  const rango = tri === 'CICLO' ? null : rangoTrimestre(tri);
+  const conRango = !!(rango && rango.inicio && rango.finAsistencia);
   const cache = grupoId && resumenAsistenciaCache[grupoId];
   if (cache && cache[alumnoId]) {
     const r = cache[alumnoId];
-    return { Presente: r.Presente, Ausente: r.Ausente, Retardo: r.Retardo, Justificado: r.Justificado };
+    if (!conRango || !r.tri) return { Presente: r.Presente, Ausente: r.Ausente, Retardo: r.Retardo, Justificado: r.Justificado };
+    // Los números por trimestre solo valen si se calcularon con el calendario ACTUAL
+    const rk = resumenAsistenciaRangos[grupoId];
+    const vigente = rk === undefined || rk === JSON.stringify(rangosParaServidor());
+    if (vigente && r.tri[tri]) { const t = r.tri[tri]; return { Presente: t.Presente, Ausente: t.Ausente, Retardo: t.Retardo, Justificado: t.Justificado }; }
+    // el calendario cambió y el resumen aún se está actualizando: mientras, se usa lo local
   }
   // Respaldo mientras llega el resumen del servidor: solo ve la ventana reciente local.
   const counts = { Presente: 0, Ausente: 0, Retardo: 0, Justificado: 0 };
   Store.merged('Asistencia').forEach(r => {
-    if (r.alumnoId === alumnoId && counts[r.estatus] !== undefined) counts[r.estatus]++;
+    if (r.alumnoId !== alumnoId || counts[r.estatus] === undefined) return;
+    if (conRango && !fechaEnRango(r.fecha, rango)) return;
+    counts[r.estatus]++;
   });
   return counts;
 }
 let resumenAsistenciaCache = {};
+let resumenAsistenciaVersion = {};   // 2 = el servidor ya cuenta por trimestre
+let resumenAsistenciaRangos = {};    // calendario con el que se pidió el resumen (si cambia, se vuelve a pedir)
 let resumenAsistenciaCargando = {};
 let resumenAsistenciaUltimoIntento = {};
 let _renderDebounceTimer = null;
@@ -830,17 +896,19 @@ function renderCurrentViewDebounced() {
   renderCurrentViewSafe();
 }
 function ensureResumenAsistencia(grupoId) {
-  if (!grupoId || resumenAsistenciaCache[grupoId] || resumenAsistenciaCargando[grupoId]) return;
+  if (!grupoId || resumenAsistenciaCargando[grupoId]) return;
+  const rangosKey = JSON.stringify(rangosParaServidor());
+  if (resumenAsistenciaCache[grupoId] && resumenAsistenciaRangos[grupoId] === rangosKey) return;
   const ahora = Date.now();
   // Si el último intento falló hace menos de un minuto, no reintentes todavía
   // (evita el bucle de reintentos infinitos cuando no hay internet).
   if (resumenAsistenciaUltimoIntento[grupoId] && (ahora - resumenAsistenciaUltimoIntento[grupoId]) < 60000) return;
   resumenAsistenciaUltimoIntento[grupoId] = ahora;
   resumenAsistenciaCargando[grupoId] = true;
-  jsonp('getResumenAsistencia', { grupoId })
+  jsonp('getResumenAsistencia', { grupoId, rangos: rangosKey })
     .then(res => {
       resumenAsistenciaCargando[grupoId] = false;
-      if (res && res.ok) { resumenAsistenciaCache[grupoId] = res.data; renderCurrentViewDebounced(); }
+      if (res && res.ok) { resumenAsistenciaCache[grupoId] = res.data; resumenAsistenciaVersion[grupoId] = res.v || 1; resumenAsistenciaRangos[grupoId] = rangosKey; renderCurrentViewDebounced(); }
       // si no vino ok, no repintamos — nada nuevo que mostrar, y evita el bucle
     })
     .catch(() => { resumenAsistenciaCargando[grupoId] = false; /* sin repintar */ });
@@ -887,7 +955,7 @@ function verResumenAsistencia() {
   });
   openModal(`
     <h2>Resumen de asistencia</h2>
-    <p class="muted">Grupo completo · todas las fechas registradas</p>
+    <p class="muted">${(() => { const t = triParaAsistencia(), r = rangoTrimestre(t); return r && r.inicio ? `${esc(t)} · del ${fmtFechaCorta(r.inicio)} al ${fmtFechaCorta(r.finAsistencia)}` : 'Todas las fechas registradas'; })()}</p>
     <table>
       <thead><tr><th>Alumno</th><th>P</th><th>A</th><th>R</th><th>J</th><th>%</th></tr></thead>
       <tbody>
@@ -963,6 +1031,125 @@ function calificacionesNoContadas(grupoId, trimestre) {
   const contadas = new Set(calificacionesVigentes(grupoId, trimestre).map(c => c.id));
   return Store.merged('Calificaciones').filter(c => c.grupoId === grupoId && c.trimestre === trimestre && !contadas.has(c.id));
 }
+
+/* ---------------- Informe de trimestre por grupo ----------------
+   UNA sola función calcula el informe (informeGrupo); la pantalla y el PDF (y más adelante el Excel)
+   salen de ella, así nunca pueden darte números distintos. Usa las mismas reglas de calificación
+   (calificacionesVigentes / acumuladoAlumno) que la cuadrícula, el Panorama y el Perfil. */
+let informeAbierto = false;
+function informeGrupo(grupoId, trimestre) {
+  const grupo = Store.data.Grupos.find(g => g.id === grupoId);
+  if (!grupo) return null;
+  const rango = rangoTrimestre(trimestre);
+  const rubros = Store.encuadre(grupo.asignatura, trimestre);
+  const actividades = actividadesVigentesDe(grupo, trimestre);
+  const vigentes = calificacionesVigentes(grupoId, trimestre);
+  const celdas = new Set(vigentes.map(c => c.alumnoId + '|' + c.actividadId));
+  const incidencias = Store.merged('Incidencias');
+  const alumnos = Store.alumnosDeGrupo(grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+  const filas = alumnos.map(a => {
+    const acum = acumuladoAlumno(a.id, rubros, vigentes);
+    const asis = contarAsistencia(a.id, grupoId, trimestre);
+    const totalAsis = asis.Presente + asis.Ausente + asis.Retardo + asis.Justificado;
+    const final = acum.tieneCalif ? notaRedondeada(acum.final) : null;
+    return {
+      id: a.id, nombre: a.nombre, detalle: acum.detalle, finalCrudo: acum.final, final, tieneCalif: acum.tieneCalif,
+      calificadas: vigentes.filter(c => c.alumnoId === a.id).length, totalActividades: actividades.length,
+      asis, totalAsis, pctAsis: totalAsis ? Math.round((asis.Presente / totalAsis) * 100) : null,
+      incidencias: incidencias.filter(i => i.alumnoId === a.id && (!(rango && rango.inicio && rango.finAsistencia) || fechaEnRango(i.fecha, rango))).length,
+      faltan: actividades.filter(act => !celdas.has(a.id + '|' + act.id)),
+      racha: rachaFaltasConsecutivas(a.id, grupoId),
+      estado: final === null ? 'Sin calificar' : (final >= 6 ? 'Aprobado' : 'Reprobado')
+    };
+  });
+
+  const conCalif = filas.filter(f => f.tieneCalif);
+  const sumP = filas.reduce((t, f) => t + f.asis.Presente, 0), sumT = filas.reduce((t, f) => t + f.totalAsis, 0);
+  const dist = { '9 a 10': 0, '8 a 8.9': 0, '7 a 7.9': 0, '6 a 6.9': 0, 'Menos de 6': 0 };
+  conCalif.forEach(f => { const n = f.final; if (n >= 9) dist['9 a 10']++; else if (n >= 8) dist['8 a 8.9']++; else if (n >= 7) dist['7 a 7.9']++; else if (n >= 6) dist['6 a 6.9']++; else dist['Menos de 6']++; });
+  return {
+    grupo, trimestre, rango, rubros, actividades, filas,
+    resumen: {
+      alumnos: filas.length, conCalif: conCalif.length,
+      promedioGrupo: conCalif.length ? conCalif.reduce((t, f) => t + f.finalCrudo, 0) / conCalif.length : null,
+      aprobados: filas.filter(f => f.estado === 'Aprobado').length, reprobados: filas.filter(f => f.estado === 'Reprobado').length,
+      sinCalificar: filas.filter(f => f.estado === 'Sin calificar').length,
+      pctAsistencia: sumT ? Math.round((sumP / sumT) * 100) : null, distribucion: dist,
+      enRiesgo: filas.filter(f => f.racha >= 3).map(f => ({ nombre: f.nombre, racha: f.racha }))
+    },
+    pendientes: filas.filter(f => f.faltan.length).map(f => ({ nombre: f.nombre, faltan: f.faltan })),
+    celdasVacias: filas.reduce((t, f) => t + f.faltan.length, 0)
+  };
+}
+
+function viewInforme() {
+  const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
+  if (!grupo) return '';
+  ensureResumenAsistencia(ctx.grupoId);
+  const inf = informeGrupo(ctx.grupoId, ctx.trimestre);
+  const r = inf.resumen, rango = inf.rango;
+  const asisCargada = !!resumenAsistenciaCache[ctx.grupoId];
+  const asisPorTri = (resumenAsistenciaVersion[ctx.grupoId] || 1) >= 2;
+  const avisos = [];
+  if (!rango || !rango.inicio) avisos.push('Este trimestre no tiene fechas (Admin › Trimestres): la asistencia no se puede separar por trimestre.');
+  if (!asisCargada) avisos.push('Aún no llega la asistencia del servidor. Si no tienes internet, la asistencia saldrá incompleta (solo se guardan unos 90 días en este aparato): conéctate y vuelve a abrir el informe antes de imprimirlo.');
+  else if (!asisPorTri) avisos.push('Tu servidor aún no cuenta la asistencia por trimestre (falta actualizar Apps Script): la asistencia que se muestra es la de todo el ciclo.');
+  if (!inf.rubros.length) avisos.push('Este grupo no tiene encuadre configurado para este trimestre (Admin › Encuadres).');
+  if (!inf.actividades.length) avisos.push('Aún no hay actividades en este trimestre.');
+
+  const rubroTh = inf.rubros.map(x => `<th>${esc(x.rubro)}<br><span class="muted" style="font-weight:400;">${esc(String(x.porcentaje))}%</span></th>`).join('');
+  const filasHtml = inf.filas.map(f => `<tr>
+      <td>${esc(f.nombre)}${f.racha >= 3 ? ' <span title="3 o más faltas seguidas" style="color:var(--danger);">⚠</span>' : ''}</td>
+      ${f.detalle.map(d => `<td>${d.n ? fmtNota(d.promedio) : '—'}</td>`).join('')}
+      <td><strong>${f.final === null ? '—' : f.final.toFixed(1)}</strong></td>
+      <td>${f.calificadas}/${f.totalActividades}</td>
+      <td>${f.pctAsis === null ? '—' : f.pctAsis + '%'}</td>
+      <td>${f.asis.Ausente}</td>
+      <td>${f.incidencias}</td>
+      <td class="${f.estado === 'Aprobado' ? 'estado-aprobado' : f.estado === 'Reprobado' ? 'estado-reprobado' : 'estado-sin'}">${f.estado}</td>
+    </tr>`).join('');
+  const dist = Object.entries(r.distribucion).map(([k, v]) => `${k}: <strong>${v}</strong>`).join(' · ');
+
+  return `
+    <div class="informe">
+      <div class="row between no-print" style="margin-bottom:8px;">
+        <button class="btn small ghost" onclick="informeAbierto=false; renderCurrentView();">← Panorama</button>
+        <button class="btn small" onclick="window.print()">Imprimir / PDF</button>
+      </div>
+      <div class="informe-cabecera">
+        <h2 style="margin:0;">Informe de trimestre</h2>
+        <p style="margin:2px 0;"><strong>${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}</strong></p>
+        <p class="muted" style="margin:2px 0;">${esc(ctx.trimestre)}${rango && rango.inicio ? ` · del ${fmtFechaCorta(rango.inicio)} al ${fmtFechaCorta(rango.fin)}${rango.finAsistencia !== rango.fin ? ` (asistencia hasta el ${fmtFechaCorta(rango.finAsistencia)})` : ''}` : ''} · Ciclo ${esc(CONFIG.CICLO)}</p>
+        <p class="muted" style="margin:2px 0; font-size:.78rem;">Generado el ${fmtFechaCorta(todayISO())}</p>
+      </div>
+      ${avisos.map(t => `<div class="card-flat no-print" style="border-color:var(--warn); margin-top:8px;">ℹ️ ${esc(t)}</div>`).join('')}
+      <div class="informe-resumen">
+        <div class="dato"><span class="muted">Alumnos</span><b>${r.alumnos}</b></div>
+        <div class="dato"><span class="muted">Promedio del grupo</span><b>${r.promedioGrupo === null ? '—' : fmtNota(r.promedioGrupo)}</b></div>
+        <div class="dato"><span class="muted">Aprobados</span><b>${r.aprobados}</b></div>
+        <div class="dato"><span class="muted">Reprobados</span><b>${r.reprobados}</b></div>
+        <div class="dato"><span class="muted">Sin calificar</span><b>${r.sinCalificar}</b></div>
+        <div class="dato"><span class="muted">Asistencia del grupo</span><b>${r.pctAsistencia === null ? '—' : r.pctAsistencia + '%'}</b></div>
+      </div>
+      <p class="muted" style="margin:4px 0 8px;">Distribución de calificaciones: ${dist}</p>
+      ${r.enRiesgo.length ? `<p style="margin:4px 0 8px;">⚠ Con 3 o más faltas seguidas: ${r.enRiesgo.map(x => `${esc(x.nombre)} (${x.racha})`).join(', ')}</p>` : ''}
+      <div class="informe-tabla">
+        <table>
+          <thead><tr><th>Alumno</th>${rubroTh}<th>Final</th><th>Calif.</th><th>Asist.</th><th>Faltas</th><th>Incid.</th><th>Estado</th></tr></thead>
+          <tbody>${filasHtml || '<tr><td colspan="9" class="muted">Este grupo no tiene alumnos.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <p class="muted" style="font-size:.74rem; margin:6px 0 0;">Final: acumulado ponderado según el encuadre, con las calificaciones capturadas en la cuadrícula (las celdas vacías no cuentan). Calif.: actividades calificadas / actividades del trimestre. Aprobado desde 6.0.</p>
+      <div class="card no-print" style="margin-top:12px;">
+        <h3 style="margin-top:0;">${inf.celdasVacias ? `⚠ Antes de cerrar: ${inf.celdasVacias} celda(s) vacía(s) en ${inf.pendientes.length} alumno(s)` : '✓ Antes de cerrar: no hay celdas vacías'}</h3>
+        <p class="muted" style="margin-top:0;">Una celda vacía no cuenta en el promedio. Revísalas por si falta capturar algo; si no aplican (por ejemplo, un alumno que entró después), déjalas vacías.</p>
+        ${inf.pendientes.map(p => `<details style="margin-top:6px;"><summary><strong>${esc(p.nombre)}</strong> · faltan ${p.faltan.length}</summary>
+          <ul style="margin:4px 0 4px 18px;">${p.faltan.map(a => `<li>${esc(a.nombre)} <span class="muted">(${esc(a.rubro)} · ${fmtFechaCorta(a.fecha)})</span></li>`).join('')}</ul></details>`).join('')}
+      </div>
+    </div>`;
+}
+
 // Un solo redondeo para MOSTRAR y para decidir aprobado/reprobado (antes 5.96 se mostraba 6.0 pero contaba como reprobado)
 function notaRedondeada(f) { return Math.round(f * 10) / 10; }
 function fmtNota(f) { return notaRedondeada(f).toFixed(1); }
