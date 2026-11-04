@@ -7,7 +7,7 @@ const CONFIG = {
   // Pega aquí la URL /exec de tu implementación de Apps Script
   API_URL: 'PEGA_AQUI_TU_URL_DE_APPS_SCRIPT_/exec',
   CICLO: '2026-2027',
-  APP_VERSION: 'v52'
+  APP_VERSION: 'v53'
 };
 // Restaura la URL guardada ANTES de cualquier intento de conexión al arrancar
 (function () {
@@ -60,7 +60,71 @@ function trimestreActual(hoy) {
   const iniciados = cal.filter(c => c.inicio && c.inicio <= hoy);
   return iniciados.length ? iniciados[iniciados.length - 1].trimestre : TRIMESTRES[0];
 }
-function rangosParaServidor() { return calendarioTrimestres().filter(c => c.inicio && c.finAsistencia).map(c => ({ t: c.trimestre, d: c.inicio, h: c.finAsistencia })); }
+/* ---------------- Parciales (cortes dentro de un trimestre) ----------------
+   Un parcial NO cambia el trimestre: es un corte por fechas. Solo se guardan las fechas en que EMPIEZAN los parciales
+   2, 3...; el Parcial 1 empieza siempre con el trimestre y cada parcial termina el día antes de que empiece el siguiente
+   (el último, al terminar la asistencia del trimestre). Un trimestre sin cortes no tiene parciales: se trabaja completo.
+   El trimestre se sigue calculando con TODAS sus actividades; el parcial muestra lo mismo restringido a sus fechas. */
+function diaAntes(iso) { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); }
+function cortesDe(tri) {   // filas guardadas (sin validar), por fecha
+  return Store.merged('Parciales').filter(p => p.cicloEscolar === CONFIG.CICLO && p.trimestre === tri && p.inicio).sort((a, b) => a.inicio.localeCompare(b.inicio));
+}
+function parcialesDe(tri) {
+  const r = rangoTrimestre(tri);
+  if (!r || !r.inicio || !r.finAsistencia) return [];
+  const validos = [];
+  cortesDe(tri).forEach(c => {   // un corte fuera del trimestre, repetido o desordenado se ignora
+    const previo = validos.length ? validos[validos.length - 1].inicio : r.inicio;
+    if (c.inicio > previo && c.inicio <= r.finAsistencia) validos.push(c);
+  });
+  if (!validos.length) return [];
+  const inicios = [r.inicio].concat(validos.map(c => c.inicio));
+  return inicios.map((ini, i) => ({
+    id: i === 0 ? 'P1:' + tri : validos[i - 1].id, trimestre: tri, nombre: 'Parcial ' + (i + 1), orden: i + 1, inicio: ini,
+    fin: i < inicios.length - 1 ? diaAntes(inicios[i + 1]) : r.finAsistencia
+  }));
+}
+// El parcial seleccionado (ctx.periodo) del trimestre en pantalla; null = "Todo el trimestre"
+function periodoActivo(tri) {
+  if (!ctx.periodo) return null;
+  return parcialesDe(tri || ctx.trimestre).find(p => p.id === ctx.periodo) || null;
+}
+function periodoDeFecha(iso, tri) { const p = parcialesDe(tri).find(x => iso >= x.inicio && iso <= x.fin); return p ? p.id : ''; }
+function etiquetaPeriodo() { const p = periodoActivo(); return p ? `${ctx.trimestre} · ${p.nombre}` : ctx.trimestre; }
+function cambiarTrimestre(t) { ctx.trimestre = t; ctx.periodo = periodoDeFecha(todayISO(), t); renderCurrentView(); }
+// Fechas con las que se cuenta la asistencia de una clave: 'Trimestre N', id de un parcial o 'CICLO' (todo, sin fechas)
+function rangoAsistencia(clave) {
+  if (!clave || clave === 'CICLO') return null;
+  if (TRIMESTRES.includes(clave)) { const r = rangoTrimestre(clave); return r && r.inicio && r.finAsistencia ? { inicio: r.inicio, finAsistencia: r.finAsistencia } : null; }
+  for (const t of TRIMESTRES) { const p = parcialesDe(t).find(x => x.id === clave); if (p) return { inicio: p.inicio, finAsistencia: p.fin }; }
+  return null;
+}
+function selectorPeriodoHTML() {
+  const ps = parcialesDe(ctx.trimestre);
+  if (!ps.length) return '';
+  const sel = periodoActivo() ? ctx.periodo : '';
+  return `<select id="ctxPeriodo" onchange="ctx.periodo=this.value; renderCurrentView();">
+      <option value="" ${sel === '' ? 'selected' : ''}>Todo el trimestre</option>
+      ${ps.map(p => `<option value="${esc(p.id)}" ${sel === p.id ? 'selected' : ''}>${esc(p.nombre)} · desde ${fmtFechaCorta(p.inicio)}</option>`).join('')}
+    </select>`;
+}
+// Una actividad con fecha fuera del parcial que se está viendo no aparece ahí: se avisa para que no parezca que se perdió
+function avisoFueraDeParcial(fecha) {
+  const p = periodoActivo();
+  if (!p || !fecha || (fecha >= p.inicio && fecha <= p.fin)) return '';
+  const donde = parcialesDe(ctx.trimestre).find(x => fecha >= x.inicio && fecha <= x.fin);
+  return `Su fecha (${fmtFechaCorta(fecha)}) cae fuera de ${p.nombre}: ` + (donde ? `la verás en ${donde.nombre} y en "Todo el trimestre".` : 'solo la verás en "Todo el trimestre".');
+}
+function quitarPorId(hoja, id) {
+  Store.data[hoja] = (Store.data[hoja] || []).filter(r => r.id !== id);
+  Store.queue[hoja] = (Store.queue[hoja] || []).filter(r => r.id !== id);
+}
+function rangosParaServidor() {
+  const tri = calendarioTrimestres().filter(c => c.inicio && c.finAsistencia).map(c => ({ t: c.trimestre, d: c.inicio, h: c.finAsistencia }));
+  const par = [];
+  TRIMESTRES.forEach(t => parcialesDe(t).forEach(p => par.push({ t: p.id, d: p.inicio, h: p.fin })));
+  return tri.concat(par);
+}
 const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 function fmtFechaCorta(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? `${Number(m[3])} ${MESES_CORTOS[Number(m[2]) - 1]} ${m[1]}` : '—'; }
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'];
@@ -115,12 +179,12 @@ function tarjetaHorarioActual() {
    CAPA DE DATOS: cache local (localStorage) + cola de sincronización
    --------------------------------------------------------------- */
 const Store = {
-  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] },
-  queue: { Borrar: [], Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] },
+  data: { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], Parciales: [], RubricaCriterios: [], RubricaValores: [] },
+  queue: { Borrar: [], Asistencia: [], Calificaciones: [], Incidencias: [], Diario: [], Grupos: [], Alumnos: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], Parciales: [], RubricaCriterios: [], RubricaValores: [] },
   // Estructura vacía completa: se usa al recibir datos del servidor, para que una
   // pestaña que aún no exista allá (backend sin actualizar) nunca deje un hueco aquí.
   emptyData() {
-    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], RubricaCriterios: [], RubricaValores: [] };
+    return { Grupos: [], Alumnos: [], Asistencia: [], Encuadres: [], Calificaciones: [], Incidencias: [], Diario: [], Actividades: [], Diagnosticos: [], Horario: [], Proyectos: [], ProyectoEquipos: [], ProyectoSesiones: [], ProyectoNotas: [], Planeaciones: [], Trimestres: [], Parciales: [], RubricaCriterios: [], RubricaValores: [] };
   },
 
   load() {
@@ -235,7 +299,7 @@ async function refreshFromServer() {
 // Un borrado se manda al servidor con reintento: si no hay internet queda pendiente (sobrevive a cerrar la app y a
 // "actualizar") y se confirma después. Antes se mandaba una sola vez y, si fallaba, el dato reaparecía.
 const ACCION_BORRADO = { Calificaciones: 'deleteCalificacion', Actividades: 'deleteActividad', Asistencia: 'deleteAsistencia',
-  Diario: 'deleteDiario', Diagnosticos: 'deleteDiagnostico', Horario: 'deleteHorario' };
+  Diario: 'deleteDiario', Diagnosticos: 'deleteDiagnostico', Horario: 'deleteHorario', Parciales: 'deleteParcial' };
 function borrarConReintento(hoja, id) {
   if (!Store.queue.Borrar) Store.queue.Borrar = [];
   if (!Store.queue.Borrar.some(b => b.hoja === hoja && b.id === id)) Store.queue.Borrar.push({ hoja, id });
@@ -343,6 +407,11 @@ async function syncPending(manual) {
       if (!res || !res.ok) throw new Error('No se pudo guardar el calendario de trimestres' + (res && res.error ? ': ' + res.error : ''));
       Store.queue.Trimestres = Store.queue.Trimestres.filter(x => x !== t);
     }
+    for (const pr of (Store.queue.Parciales || []).slice()) {
+      const res = await jsonp('saveParcial', { data: JSON.stringify(pr) });
+      if (!res || !res.ok) throw new Error('No se pudo guardar el calendario de parciales' + (res && res.error ? ': ' + res.error : ''));
+      Store.queue.Parciales = Store.queue.Parciales.filter(x => x !== pr);
+    }
     Store.persist();
     toast('Sincronizado ✓');
     await refreshFromServer();
@@ -439,7 +508,8 @@ const NAV = [
   { id: 'admin', label: 'Admin', icon: iconSettings }
 ];
 let currentView = 'dashboard';
-let ctx = { grupoId: null, fecha: todayISO(), asignatura: null, trimestre: trimestreActual() };
+let ctx = { grupoId: null, fecha: todayISO(), asignatura: null, trimestre: trimestreActual(), periodo: '' };
+ctx.periodo = periodoDeFecha(todayISO(), ctx.trimestre);   // al abrir, el parcial en curso (si el trimestre tiene)
 
 function iconHome(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>';}
 function iconCheck(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l5 5L20 6"/></svg>';}
@@ -473,9 +543,9 @@ function renderContextRow() {
         <option value="">Panorama general (todos los grupos)</option>
         ${grupos.map(g => `<option value="${g.id}" ${ctx.grupoId === g.id ? 'selected' : ''}>${esc(g.escuela)} · ${esc(g.grado)}${esc(g.grupo)} · ${esc(g.asignatura)}</option>`).join('')}
       </select>
-      ${ctx.grupoId ? `<select id="ctxTrimestre" onchange="ctx.trimestre=this.value; renderCurrentView();">
+      ${ctx.grupoId ? `<select id="ctxTrimestre" onchange="cambiarTrimestre(this.value);">
           ${TRIMESTRES.map(t => `<option ${ctx.trimestre === t ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>` : ''}`;
+        </select>${selectorPeriodoHTML()}` : ''}`;
     return;
   }
   let html = `<select id="ctxGrupo" onchange="ctx.grupoId=this.value; renderCurrentView();">
@@ -486,9 +556,9 @@ function renderContextRow() {
     html += `<input type="date" id="ctxFecha" value="${ctx.fecha}" onchange="ctx.fecha=this.value; renderCurrentView();">`;
   }
   if (currentView === 'calificaciones') {
-    html += `<select id="ctxTrimestre" onchange="ctx.trimestre=this.value; renderCurrentView();">
+    html += `<select id="ctxTrimestre" onchange="cambiarTrimestre(this.value);">
         ${TRIMESTRES.map(t => `<option ${ctx.trimestre === t ? 'selected' : ''}>${t}</option>`).join('')}
-      </select>`;
+      </select>${selectorPeriodoHTML()}`;
   }
   row.innerHTML = html;
 }
@@ -544,7 +614,7 @@ function viewDashboardGrupo() {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const riesgo = alumnosEnRiesgo(ctx.grupoId);
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
-  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoActivo());
 
   const informe = alumnos.map(a => {
     const final = acumuladoAlumno(a.id, rubros, vigentes).final;
@@ -557,10 +627,10 @@ function viewDashboardGrupo() {
   return `
     <div class="row between no-print" style="margin-bottom:4px;">
       <span class="muted">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos</span>
-      <span class="row" style="gap:6px;"><button class="btn small" onclick="informeAbierto=true; renderCurrentView();">📄 Informe del trimestre</button>
+      <span class="row" style="gap:6px;"><button class="btn small" onclick="informeAbierto=true; renderCurrentView();">📄 Informe del ${periodoActivo() ? 'parcial' : 'trimestre'}</button>
       <button class="btn small secondary" onclick="window.print()">Imprimir / PDF</button></span>
     </div>
-    <div class="card-flat muted" style="display:none;" id="printHeader">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos · ${esc(ctx.trimestre)}</div>
+    <div class="card-flat muted" style="display:none;" id="printHeader">${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)} · ${alumnos.length} alumnos · ${esc(etiquetaPeriodo())}</div>
     ${riesgo.length ? `
       <div class="card" style="border-color:var(--danger);">
         <h3 style="color:var(--danger);">⚠ ${riesgo.length} alumno(s) con 3+ faltas seguidas</h3>
@@ -569,10 +639,10 @@ function viewDashboardGrupo() {
           <span class="tag" style="background:var(--danger); color:#fff;">${x.racha} faltas</span>
         </div>`).join('')}
       </div>` : ''}
-    <h3>Informe del grupo — ${esc(ctx.trimestre)}</h3>
+    <h3>Informe del grupo — ${esc(etiquetaPeriodo())}</h3>
     <div class="card">
       <table>
-        <thead><tr><th>Alumno</th><th>Calificación</th><th>% Asistencia</th></tr></thead>
+        <thead><tr><th>Alumno</th><th>${periodoActivo() ? 'Acumulado' : 'Calificación'}</th><th>% Asistencia</th></tr></thead>
         <tbody>
           ${informe.map(r => `<tr><td>${esc(r.nombre)}</td><td>${r.final}</td><td>${r.pctAsis}</td></tr>`).join('')}
         </tbody>
@@ -581,15 +651,15 @@ function viewDashboardGrupo() {
     </div>
     <h3>Asistencia acumulada</h3>
     <div class="card chart-box"><canvas id="chartAsistenciaGrupo"></canvas></div>
-    <h3>% de entregas por rubro — ${esc(ctx.trimestre)}</h3>
+    <h3>% de entregas por rubro — ${esc(etiquetaPeriodo())}</h3>
     <div class="card chart-box"><canvas id="chartEntregas"></canvas></div>
-    <h3>Distribución de calificaciones por rubro — ${esc(ctx.trimestre)}</h3>
+    <h3>Distribución de calificaciones por rubro — ${esc(etiquetaPeriodo())}</h3>
     ${rubros.length === 0 ? '<p class="muted">No hay encuadre configurado para esta materia/trimestre.</p>' :
       rubros.map((r, i) => `
         <p class="muted" style="margin:10px 0 4px;">${esc(r.rubro)} (${r.porcentaje}%)</p>
         <div class="card chart-box" style="height:190px;"><canvas id="chartRubroDist-${i}"></canvas></div>
       `).join('')}
-    <h3>Distribución de calificaciones — ${esc(ctx.trimestre)}</h3>
+    <h3>Distribución de calificaciones — ${esc(etiquetaPeriodo())}</h3>
     <div class="card chart-box"><canvas id="chartDistribucion"></canvas></div>
   `;
 }
@@ -697,7 +767,7 @@ function renderDashboardCharts() {
   const elE = document.getElementById('chartEntregas');
   if (elE) {
     destroyChart('chartEntregas');
-    const vigentesE = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+    const vigentesE = calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoActivo());
     const idsAlumnos = new Set(alumnos.map(a => a.id));
     const pcts = rubros.map(r => {
       if (alumnos.length === 0) return 0;
@@ -712,7 +782,7 @@ function renderDashboardCharts() {
   }
 
   // 3. Distribución de calificaciones por rubro (cuántos 10, 9, 8...)
-  const calRowsTrimestre = calificacionesVigentes(ctx.grupoId, ctx.trimestre).filter(c => alumnos.some(a => a.id === c.alumnoId));
+  const calRowsTrimestre = calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoActivo()).filter(c => alumnos.some(a => a.id === c.alumnoId));
   const buckets = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
   rubros.forEach((r, i) => {
     const elR = document.getElementById(`chartRubroDist-${i}`);
@@ -732,7 +802,7 @@ function renderDashboardCharts() {
   if (elD) {
     destroyChart('chartDistribucion');
     let aprobado = 0, reprobado = 0, sinCalificar = 0;
-    const vigentesD = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+    const vigentesD = calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoActivo());
     alumnos.forEach(a => {
       const acum = acumuladoAlumno(a.id, rubros, vigentesD);
       if (!acum.tieneCalif) { sinCalificar++; return; }
@@ -740,7 +810,7 @@ function renderDashboardCharts() {
     });
     chartInstances.chartDistribucion = new Chart(elD, {
       type: 'doughnut',
-      data: { labels: ['Aprobado (≥6)', 'Reprobado (<6)', 'Sin calificar'], datasets: [{ data: [aprobado, reprobado, sinCalificar], backgroundColor: [CHART_COLORS.Presente, CHART_COLORS.Ausente, CHART_COLORS.line] }] },
+      data: { labels: periodoActivo() ? ['Acumulado ≥ 6', 'Acumulado < 6', 'Sin calificar'] : ['Aprobado (≥6)', 'Reprobado (<6)', 'Sin calificar'], datasets: [{ data: [aprobado, reprobado, sinCalificar], backgroundColor: [CHART_COLORS.Presente, CHART_COLORS.Ausente, CHART_COLORS.line] }] },
       options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
     });
   }
@@ -860,14 +930,18 @@ function ciclarAsistenciaCelda(alumnoId, fecha, el) {
 // En qué trimestre se cuenta la asistencia que se está viendo: en Asistencia/Diario el de la fecha elegida;
 // en Panorama, Calificaciones y Perfil el trimestre seleccionado.
 function triParaAsistencia() {
-  if (currentView === 'asistencia' || currentView === 'diario') return trimestreDeFecha(ctx.fecha) || ctx.trimestre;
-  return ctx.trimestre;
+  if (currentView === 'asistencia' || currentView === 'diario') {
+    const t = trimestreDeFecha(ctx.fecha) || ctx.trimestre;
+    return periodoDeFecha(ctx.fecha, t) || t;   // el parcial de la fecha que ves (si hay), si no el trimestre
+  }
+  const p = periodoActivo();
+  return p ? p.id : ctx.trimestre;
 }
-// tri = 'Trimestre N' | 'CICLO' (todo el ciclo). Sin tri: el que corresponde a la pantalla.
+// tri = 'Trimestre N' | id de un parcial | 'CICLO' (todo el ciclo). Sin tri: el que corresponde a la pantalla.
 function contarAsistencia(alumnoId, grupoId, tri) {
   tri = tri || triParaAsistencia();
-  const rango = tri === 'CICLO' ? null : rangoTrimestre(tri);
-  const conRango = !!(rango && rango.inicio && rango.finAsistencia);
+  const rango = rangoAsistencia(tri);
+  const conRango = !!rango;
   const cache = grupoId && resumenAsistenciaCache[grupoId];
   if (cache && cache[alumnoId]) {
     const r = cache[alumnoId];
@@ -946,17 +1020,25 @@ function rosterRow(a, registro) {
     </div>
   </div>`;
 }
-function verResumenAsistencia() {
+function verResumenAsistencia(clave) {
+  const key = clave || triParaAsistencia();
+  const t = TRIMESTRES.includes(key) ? key : (TRIMESTRES.find(x => parcialesDe(x).some(p => p.id === key)) || trimestreDeFecha(ctx.fecha) || ctx.trimestre);
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const rows = alumnos.map(a => {
-    const c = contarAsistencia(a.id, ctx.grupoId);
+    const c = contarAsistencia(a.id, ctx.grupoId, key);
     const total = c.Presente + c.Ausente + c.Retardo + c.Justificado;
     const pct = total ? Math.round((c.Presente / total) * 100) : 0;
     return { nombre: a.nombre, ...c, total, pct };
   });
+  const opciones = [[t, 'Todo el trimestre']].concat(parcialesDe(t).map(p => [p.id, p.nombre])).concat([['CICLO', 'Todo el ciclo']]);
+  const r = rangoAsistencia(key);
+  const nombre = key === 'CICLO' ? 'Todo el ciclo' : (TRIMESTRES.includes(key) ? key : ((parcialesDe(t).find(p => p.id === key) || {}).nombre || key));
   openModal(`
     <h2>Resumen de asistencia</h2>
-    <p class="muted">${(() => { const t = triParaAsistencia(), r = rangoTrimestre(t); return r && r.inicio ? `${esc(t)} · del ${fmtFechaCorta(r.inicio)} al ${fmtFechaCorta(r.finAsistencia)}` : 'Todas las fechas registradas'; })()}</p>
+    <div class="field"><select onchange="verResumenAsistencia(this.value)">
+      ${opciones.map(([v, n]) => `<option value="${esc(v)}" ${v === key ? 'selected' : ''}>${esc(v === t ? t + ' (completo)' : n)}</option>`).join('')}
+    </select></div>
+    <p class="muted">${esc(nombre)}${r ? ` · del ${fmtFechaCorta(r.inicio)} al ${fmtFechaCorta(r.finAsistencia)}` : ' · todas las fechas registradas'}</p>
     <table>
       <thead><tr><th>Alumno</th><th>P</th><th>A</th><th>R</th><th>J</th><th>%</th></tr></thead>
       <tbody>
@@ -999,12 +1081,13 @@ function guardarUnaAsistencia(alumnoId, estatus, item) {
 let califVista = 'grid';
 function abrevRubro(rubro) { return (rubro || '').trim().slice(0, 2).toUpperCase(); }
 function actividadVigente(x) { return x.activo !== false && x.activo !== 'FALSE'; }
-function actividadesVigentesDe(grupo, trimestre) {
+function actividadesVigentesDe(grupo, trimestre, periodo) {
   return Store.merged('Actividades')
-    .filter(x => x.grupoId === grupo.id && x.asignatura === grupo.asignatura && x.trimestre === trimestre && actividadVigente(x))
+    .filter(x => x.grupoId === grupo.id && x.asignatura === grupo.asignatura && x.trimestre === trimestre && actividadVigente(x)
+      && (!periodo || (x.fecha && x.fecha >= periodo.inicio && x.fecha <= periodo.fin)))   // periodo = un parcial: solo sus fechas
     .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
 }
-function actividadesDe(grupo) { return actividadesVigentesDe(grupo, ctx.trimestre); }
+function actividadesDe(grupo) { return actividadesVigentesDe(grupo, ctx.trimestre, periodoActivo()); }
 
 /* ---------------- Qué calificaciones cuentan en el promedio ----------------
    SOLO cuentan las que están en la cuadrícula: ligadas a una actividad que existe en ese grupo y
@@ -1012,10 +1095,10 @@ function actividadesDe(grupo) { return actividadesVigentesDe(grupo, ctx.trimestr
    la que se ve). Lo demás (capturas de la vista "Por alumno" que ya no existe, de actividades borradas,
    repetidas, vacías o dañadas) NO entra en ningún promedio, aunque siga guardado en el Sheet.
    El rubro es el de la actividad. Esta es la ÚNICA regla: cuadrícula, Panorama, Perfil y gráficas la usan. */
-function calificacionesVigentes(grupoId, trimestre) {
+function calificacionesVigentes(grupoId, trimestre, periodo) {
   const grupo = Store.data.Grupos.find(g => g.id === grupoId);
   if (!grupo) return [];
-  const acts = new Map(actividadesVigentesDe(grupo, trimestre).map(x => [x.id, x]));
+  const acts = new Map(actividadesVigentesDe(grupo, trimestre, periodo).map(x => [x.id, x]));
   const porCelda = new Map();
   Store.merged('Calificaciones').forEach(c => {
     if (c.grupoId !== grupoId || c.trimestre !== trimestre) return;
@@ -1038,20 +1121,20 @@ function calificacionesNoContadas(grupoId, trimestre) {
    salen de ella, así nunca pueden darte números distintos. Usa las mismas reglas de calificación
    (calificacionesVigentes / acumuladoAlumno) que la cuadrícula, el Panorama y el Perfil. */
 let informeAbierto = false;
-function informeGrupo(grupoId, trimestre) {
+function informeGrupo(grupoId, trimestre, periodo) {
   const grupo = Store.data.Grupos.find(g => g.id === grupoId);
   if (!grupo) return null;
-  const rango = rangoTrimestre(trimestre);
+  const rango = periodo ? { inicio: periodo.inicio, fin: periodo.fin, finAsistencia: periodo.fin } : rangoTrimestre(trimestre);
   const rubros = Store.encuadre(grupo.asignatura, trimestre);
-  const actividades = actividadesVigentesDe(grupo, trimestre);
-  const vigentes = calificacionesVigentes(grupoId, trimestre);
+  const actividades = actividadesVigentesDe(grupo, trimestre, periodo);
+  const vigentes = calificacionesVigentes(grupoId, trimestre, periodo);
   const celdas = new Set(vigentes.map(c => c.alumnoId + '|' + c.actividadId));
   const incidencias = Store.merged('Incidencias');
   const alumnos = Store.alumnosDeGrupo(grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
 
   const filas = alumnos.map(a => {
     const acum = acumuladoAlumno(a.id, rubros, vigentes);
-    const asis = contarAsistencia(a.id, grupoId, trimestre);
+    const asis = contarAsistencia(a.id, grupoId, periodo ? periodo.id : trimestre);
     const totalAsis = asis.Presente + asis.Ausente + asis.Retardo + asis.Justificado;
     const final = acum.tieneCalif ? notaRedondeada(acum.final) : null;
     return {
@@ -1070,7 +1153,7 @@ function informeGrupo(grupoId, trimestre) {
   const dist = { '9 a 10': 0, '8 a 8.9': 0, '7 a 7.9': 0, '6 a 6.9': 0, 'Menos de 6': 0 };
   conCalif.forEach(f => { const n = f.final; if (n >= 9) dist['9 a 10']++; else if (n >= 8) dist['8 a 8.9']++; else if (n >= 7) dist['7 a 7.9']++; else if (n >= 6) dist['6 a 6.9']++; else dist['Menos de 6']++; });
   return {
-    grupo, trimestre, rango, rubros, actividades, filas,
+    grupo, trimestre, periodo: periodo || null, rango, rubros, actividades, filas,
     resumen: {
       alumnos: filas.length, conCalif: conCalif.length,
       promedioGrupo: conCalif.length ? conCalif.reduce((t, f) => t + f.finalCrudo, 0) / conCalif.length : null,
@@ -1088,8 +1171,10 @@ function viewInforme() {
   const grupo = Store.data.Grupos.find(g => g.id === ctx.grupoId);
   if (!grupo) return '';
   ensureResumenAsistencia(ctx.grupoId);
-  const inf = informeGrupo(ctx.grupoId, ctx.trimestre);
+  const periodo = periodoActivo();
+  const inf = informeGrupo(ctx.grupoId, ctx.trimestre, periodo);
   const r = inf.resumen, rango = inf.rango;
+  const etq = (e) => (periodo ? ({ Aprobado: '6 o más', Reprobado: 'Menos de 6' }[e] || e) : e);   // en un parcial no se habla de aprobar o reprobar
   const asisCargada = !!resumenAsistenciaCache[ctx.grupoId];
   const asisPorTri = (resumenAsistenciaVersion[ctx.grupoId] || 1) >= 2;
   const avisos = [];
@@ -1097,7 +1182,7 @@ function viewInforme() {
   if (!asisCargada) avisos.push('Aún no llega la asistencia del servidor. Si no tienes internet, la asistencia saldrá incompleta (solo se guardan unos 90 días en este aparato): conéctate y vuelve a abrir el informe antes de imprimirlo.');
   else if (!asisPorTri) avisos.push('Tu servidor aún no cuenta la asistencia por trimestre (falta actualizar Apps Script): la asistencia que se muestra es la de todo el ciclo.');
   if (!inf.rubros.length) avisos.push('Este grupo no tiene encuadre configurado para este trimestre (Admin › Encuadres).');
-  if (!inf.actividades.length) avisos.push('Aún no hay actividades en este trimestre.');
+  if (!inf.actividades.length) avisos.push(periodo ? `Aún no hay actividades en ${periodo.nombre} (del ${fmtFechaCorta(periodo.inicio)} al ${fmtFechaCorta(periodo.fin)}).` : 'Aún no hay actividades en este trimestre.');
 
   const rubroTh = inf.rubros.map(x => `<th>${esc(x.rubro)}<br><span class="muted" style="font-weight:400;">${esc(String(x.porcentaje))}%</span></th>`).join('');
   const filasHtml = inf.filas.map(f => `<tr>
@@ -1108,7 +1193,7 @@ function viewInforme() {
       <td>${f.pctAsis === null ? '—' : f.pctAsis + '%'}</td>
       <td>${f.asis.Ausente}</td>
       <td>${f.incidencias}</td>
-      <td class="${f.estado === 'Aprobado' ? 'estado-aprobado' : f.estado === 'Reprobado' ? 'estado-reprobado' : 'estado-sin'}">${f.estado}</td>
+      <td class="${f.estado === 'Aprobado' ? 'estado-aprobado' : f.estado === 'Reprobado' ? 'estado-reprobado' : 'estado-sin'}">${etq(f.estado)}</td>
     </tr>`).join('');
   const dist = Object.entries(r.distribucion).map(([k, v]) => `${k}: <strong>${v}</strong>`).join(' · ');
 
@@ -1119,17 +1204,17 @@ function viewInforme() {
         <button class="btn small" onclick="window.print()">Imprimir / PDF</button>
       </div>
       <div class="informe-cabecera">
-        <h2 style="margin:0;">Informe de trimestre</h2>
+        <h2 style="margin:0;">Informe de ${periodo ? 'parcial' : 'trimestre'}</h2>
         <p style="margin:2px 0;"><strong>${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}</strong></p>
-        <p class="muted" style="margin:2px 0;">${esc(ctx.trimestre)}${rango && rango.inicio ? ` · del ${fmtFechaCorta(rango.inicio)} al ${fmtFechaCorta(rango.fin)}${rango.finAsistencia !== rango.fin ? ` (asistencia hasta el ${fmtFechaCorta(rango.finAsistencia)})` : ''}` : ''} · Ciclo ${esc(CONFIG.CICLO)}</p>
+        <p class="muted" style="margin:2px 0;">${esc(ctx.trimestre)}${periodo ? ` · ${esc(periodo.nombre)}` : ''}${rango && rango.inicio ? ` · del ${fmtFechaCorta(rango.inicio)} al ${fmtFechaCorta(rango.fin)}${rango.finAsistencia !== rango.fin ? ` (asistencia hasta el ${fmtFechaCorta(rango.finAsistencia)})` : ''}` : ''} · Ciclo ${esc(CONFIG.CICLO)}</p>
         <p class="muted" style="margin:2px 0; font-size:.78rem;">Generado el ${fmtFechaCorta(todayISO())}</p>
       </div>
       ${avisos.map(t => `<div class="card-flat no-print" style="border-color:var(--warn); margin-top:8px;">ℹ️ ${esc(t)}</div>`).join('')}
       <div class="informe-resumen">
         <div class="dato"><span class="muted">Alumnos</span><b>${r.alumnos}</b></div>
         <div class="dato"><span class="muted">Promedio del grupo</span><b>${r.promedioGrupo === null ? '—' : fmtNota(r.promedioGrupo)}</b></div>
-        <div class="dato"><span class="muted">Aprobados</span><b>${r.aprobados}</b></div>
-        <div class="dato"><span class="muted">Reprobados</span><b>${r.reprobados}</b></div>
+        <div class="dato"><span class="muted">${periodo ? 'Acum. 6 o más' : 'Aprobados'}</span><b>${r.aprobados}</b></div>
+        <div class="dato"><span class="muted">${periodo ? 'Acum. menor de 6' : 'Reprobados'}</span><b>${r.reprobados}</b></div>
         <div class="dato"><span class="muted">Sin calificar</span><b>${r.sinCalificar}</b></div>
         <div class="dato"><span class="muted">Asistencia del grupo</span><b>${r.pctAsistencia === null ? '—' : r.pctAsistencia + '%'}</b></div>
       </div>
@@ -1137,11 +1222,11 @@ function viewInforme() {
       ${r.enRiesgo.length ? `<p style="margin:4px 0 8px;">⚠ Con 3 o más faltas seguidas: ${r.enRiesgo.map(x => `${esc(x.nombre)} (${x.racha})`).join(', ')}</p>` : ''}
       <div class="informe-tabla">
         <table>
-          <thead><tr><th>Alumno</th>${rubroTh}<th>Final</th><th>Calif.</th><th>Asist.</th><th>Faltas</th><th>Incid.</th><th>Estado</th></tr></thead>
+          <thead><tr><th>Alumno</th>${rubroTh}<th>${periodo ? 'Acumulado' : 'Final'}</th><th>Calif.</th><th>Asist.</th><th>Faltas</th><th>Incid.</th><th>Estado</th></tr></thead>
           <tbody>${filasHtml || '<tr><td colspan="9" class="muted">Este grupo no tiene alumnos.</td></tr>'}</tbody>
         </table>
       </div>
-      <p class="muted" style="font-size:.74rem; margin:6px 0 0;">Final: acumulado ponderado según el encuadre, con las calificaciones capturadas en la cuadrícula (las celdas vacías no cuentan). Calif.: actividades calificadas / actividades del trimestre. Aprobado desde 6.0.</p>
+      <p class="muted" style="font-size:.74rem; margin:6px 0 0;">${periodo ? `Acumulado del parcial: lo calificado en sus fechas, ponderado con el encuadre del trimestre (las celdas vacías no cuentan); es normal que sea bajo si aún faltan rubros por calificar. Calif.: actividades calificadas / actividades del parcial. El resultado del trimestre se calcula con todas sus actividades.` : 'Final: acumulado ponderado según el encuadre, con las calificaciones capturadas en la cuadrícula (las celdas vacías no cuentan). Calif.: actividades calificadas / actividades del trimestre. Aprobado desde 6.0.'}</p>
       <div class="card no-print" style="margin-top:12px;">
         <h3 style="margin-top:0;">${inf.celdasVacias ? `⚠ Antes de cerrar: ${inf.celdasVacias} celda(s) vacía(s) en ${inf.pendientes.length} alumno(s)` : '✓ Antes de cerrar: no hay celdas vacías'}</h3>
         <p class="muted" style="margin-top:0;">Una celda vacía no cuenta en el promedio. Revísalas por si falta capturar algo; si no aplican (por ejemplo, un alumno que entró después), déjalas vacías.</p>
@@ -1191,8 +1276,10 @@ function califVistaGrid(grupo, rubros) {
   const alumnos = Store.alumnosDeGrupo(ctx.grupoId).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const actividades = actividadesDe(grupo);
   const calRows = Store.merged('Calificaciones').filter(c => c.grupoId === ctx.grupoId && c.trimestre === ctx.trimestre);
-  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre);
+  const periodoSel = periodoActivo();
+  const vigentes = calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoSel);
   const noContadas = calificacionesNoContadas(ctx.grupoId, ctx.trimestre).length;
+  const avisoPeriodo = periodoSel ? `<p class="muted small" style="margin:6px 2px;">📅 Mostrando solo las actividades de <strong>${esc(periodoSel.nombre)}</strong> (del ${fmtFechaCorta(periodoSel.inicio)} al ${fmtFechaCorta(periodoSel.fin)}). El promedio es lo calificado en estas fechas; el trimestre se calcula con todas.</p>` : '';
   const avisoNoContadas = noContadas
     ? `<p class="muted small" style="margin:6px 2px;">ℹ️ Hay ${noContadas} calificación(es) antigua(s) o inválida(s) en este grupo y trimestre (sin actividad, repetidas o fuera de 0–10) que <strong>no cuentan</strong> en el promedio.</p>` : '';
 
@@ -1212,13 +1299,13 @@ function califVistaGrid(grupo, rubros) {
     </div>`;
 
   if (actividades.length === 0) {
-    return formNueva + '<p class="muted" style="text-align:center;">Agrega tu primera actividad para empezar a capturar en cuadrícula.</p>';
+    return formNueva + avisoPeriodo + (periodoSel ? `<p class="muted" style="text-align:center;">Aún no hay actividades en ${esc(periodoSel.nombre)}. Las nuevas con fecha en este parcial aparecerán aquí.</p>` : '<p class="muted" style="text-align:center;">Agrega tu primera actividad para empezar a capturar en cuadrícula.</p>');
   }
 
   const finalPorAlumno = {};
   alumnos.forEach(a => { finalPorAlumno[a.id] = acumuladoAlumno(a.id, rubros, vigentes).final; });
 
-  return formNueva + avisoNoContadas + `
+  return formNueva + avisoPeriodo + avisoNoContadas + `
     <div class="tabla-fija" style="overflow-x:auto; margin-top:10px;">
     <table style="min-width:${360 + actividades.length * 84}px;">
       <thead><tr>
@@ -1254,7 +1341,7 @@ function crearActividad() {
   Store.upsertLocal('Actividades', row);
   Store.enqueue('Actividades', row);
   Store.persist();
-  toast('Actividad agregada');
+  toast('Actividad agregada' + (avisoFueraDeParcial(fecha) ? '. ' + avisoFueraDeParcial(fecha) : ''));
   scheduleSyncPending();
   renderCurrentView();
 }
@@ -1300,7 +1387,7 @@ function guardarEdicionActividad(id) {
 
   Store.persist();
   closeModal();
-  toast('Actividad actualizada' + (relacionadas.length ? ` (${relacionadas.length} calificación(es) recalculada(s))` : ''));
+  toast('Actividad actualizada' + (relacionadas.length ? ` (${relacionadas.length} calificación(es) recalculada(s))` : '') + (avisoFueraDeParcial(row.fecha) ? '. ' + avisoFueraDeParcial(row.fecha) : ''));
   scheduleSyncPending();
   renderCurrentView();
 }
@@ -1370,7 +1457,7 @@ function actualizarPromedioAlumno(alumnoId, grupo) {
   const el = document.querySelector(`[data-promedio="${alumnoId}"]`);
   if (!el || !grupo) return;
   const rubros = Store.encuadre(grupo.asignatura, ctx.trimestre);
-  el.textContent = fmtNota(acumuladoAlumno(alumnoId, rubros, calificacionesVigentes(ctx.grupoId, ctx.trimestre)).final);
+  el.textContent = fmtNota(acumuladoAlumno(alumnoId, rubros, calificacionesVigentes(ctx.grupoId, ctx.trimestre, periodoActivo())).final);
 }
 
 /* ================================================================
