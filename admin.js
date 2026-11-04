@@ -278,7 +278,7 @@ function renderPerfilDetalle(a) {
       <p class="muted">${grupo ? `${esc(grupo.escuela)} · ${esc(grupo.grado)}${esc(grupo.grupo)} · ${esc(grupo.asignatura)}` : 'Sin grupo'}${a.matricula ? ' · Matrícula: ' + esc(a.matricula) : ''}</p>
     </div>
 
-    <h3>Asistencia · ${esc(ctx.trimestre)}</h3>
+    <h3>Asistencia · ${esc(etiquetaPeriodo())}</h3>
     <div class="card row between">
       <div><div class="muted">Presente</div><h2 style="color:var(--ok);">${counts.Presente}</h2></div>
       <div><div class="muted">Ausente</div><h2 style="color:var(--danger);">${counts.Ausente}</h2></div>
@@ -311,8 +311,12 @@ function renderPerfilDetalle(a) {
 
 // Asistencia del alumno desglosada por trimestre y del ciclo completo
 function perfilAsistenciaTabla(a) {
-  const filas = TRIMESTRES.map(t => ({ etiqueta: t, c: contarAsistencia(a.id, a.grupoId, t), r: rangoTrimestre(t) }))
-    .concat([{ etiqueta: 'Ciclo completo', c: contarAsistencia(a.id, a.grupoId, 'CICLO'), r: null }]);
+  const filas = [];
+  TRIMESTRES.forEach(t => {
+    filas.push({ etiqueta: t, c: contarAsistencia(a.id, a.grupoId, t), r: rangoTrimestre(t) });
+    parcialesDe(t).forEach(p => filas.push({ etiqueta: '↳ ' + p.nombre, c: contarAsistencia(a.id, a.grupoId, p.id), r: { inicio: p.inicio, finAsistencia: p.fin } }));
+  });
+  filas.push({ etiqueta: 'Ciclo completo', c: contarAsistencia(a.id, a.grupoId, 'CICLO'), r: null });
   const sinTrimestres = resumenAsistenciaCache[a.grupoId] && (resumenAsistenciaVersion[a.grupoId] || 1) < 2;
   return `<div class="card-flat">
     <table><thead><tr><th>Periodo</th><th>P</th><th>A</th><th>R</th><th>J</th><th>%</th></tr></thead><tbody>
@@ -339,31 +343,71 @@ function renderPerfilChart() {
   });
 }
 
-/* ---------------- TRIMESTRES (calendario) ---------------- */
+/* ---------------- TRIMESTRES (calendario) y PARCIALES ---------------- */
+const INP_FECHA = 'width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised);';
+function corteRowHTML(id, inicio, n) {
+  return `<div class="corte-row row" data-corte-id="${esc(id || '')}" style="gap:8px; align-items:flex-end; margin-top:6px;">
+    <span class="corte-nombre" style="min-width:74px; font-weight:600; padding-bottom:9px;">Parcial ${n}</span>
+    <label style="flex:1;"><span style="display:block; font-size:.72rem; color:var(--ink-soft);">Empieza el</span><input type="date" class="corte-fecha" value="${esc(inicio || '')}" style="${INP_FECHA}"></label>
+    <button class="btn small ghost" onclick="quitarCorte(this)" title="Quitar este parcial">✕</button>
+  </div>`;
+}
+function textoAyudaCortes(n) {
+  return n === 0 ? 'Sin parciales: se trabaja con el trimestre completo.'
+    : 'El Parcial 1 empieza con el trimestre y termina el día antes del Parcial 2; cada parcial termina el día antes de que empiece el siguiente.';
+}
+function renumerarCortes(tri) {
+  const lista = document.querySelector(`[data-cortes="${tri}"]`);
+  if (!lista) return;
+  const filas = [...lista.querySelectorAll('.corte-row')];
+  filas.forEach((f, i) => { f.querySelector('.corte-nombre').textContent = 'Parcial ' + (i + 2); });
+  const ayuda = lista.parentElement.querySelector('.cortes-ayuda');
+  if (ayuda) ayuda.textContent = textoAyudaCortes(filas.length);
+}
+function agregarCorte(tri) {
+  const lista = document.querySelector(`[data-cortes="${tri}"]`);
+  if (!lista) return;
+  lista.insertAdjacentHTML('beforeend', corteRowHTML('', '', 2));
+  renumerarCortes(tri);
+}
+function quitarCorte(btn) {
+  const lista = btn.closest('[data-cortes]');
+  btn.closest('.corte-row').remove();
+  if (lista) renumerarCortes(lista.dataset.cortes);
+}
 function adminTrimestres() {
   const cal = calendarioTrimestres();
   const lbl = 'display:block; font-size:.75rem; color:var(--ink-soft);';
-  const inp = 'width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised);';
   return `
     <div class="card">
       <h3 style="margin-top:0;">Calendario de trimestres · ciclo ${esc(CONFIG.CICLO)}</h3>
       <p class="muted">La asistencia se cuenta por trimestre con estas fechas. <strong>Fin</strong> es el último día del trimestre para calificaciones; <strong>Última asistencia</strong> es el último día en que se pasa lista (puede ser posterior al fin, como en el tercer trimestre).</p>
-      ${cal.map(c => `
+      ${cal.map(c => {
+        const cortes = cortesDe(c.trimestre);
+        return `
         <div class="card-flat" data-tri="${esc(c.trimestre)}" data-id="${c.id || ''}">
           <strong>${esc(c.trimestre)}</strong>
           <div class="row" style="margin-top:6px; gap:8px; align-items:flex-end;">
-            <label style="flex:1;"><span style="${lbl}">Inicio</span><input type="date" class="tri-inicio" value="${esc(c.inicio)}" style="${inp}"></label>
-            <label style="flex:1;"><span style="${lbl}">Fin</span><input type="date" class="tri-fin" value="${esc(c.fin)}" style="${inp}"></label>
-            <label style="flex:1;"><span style="${lbl}">Última asistencia</span><input type="date" class="tri-asis" value="${esc(c.finAsistencia)}" style="${inp}"></label>
+            <label style="flex:1;"><span style="${lbl}">Inicio</span><input type="date" class="tri-inicio" value="${esc(c.inicio)}" style="${INP_FECHA}"></label>
+            <label style="flex:1;"><span style="${lbl}">Fin</span><input type="date" class="tri-fin" value="${esc(c.fin)}" style="${INP_FECHA}"></label>
+            <label style="flex:1;"><span style="${lbl}">Última asistencia</span><input type="date" class="tri-asis" value="${esc(c.finAsistencia)}" style="${INP_FECHA}"></label>
           </div>
-        </div>`).join('')}
+          <div style="margin-top:10px; border-top:1px dashed var(--line); padding-top:8px;">
+            <span style="${lbl}"><strong>Parciales</strong> · cortes dentro del trimestre (el trimestre se sigue calculando con todo)</span>
+            <div data-cortes="${esc(c.trimestre)}">${cortes.map((p, i) => corteRowHTML(p.id, p.inicio, i + 2)).join('')}</div>
+            <p class="muted cortes-ayuda" style="font-size:.74rem; margin:4px 0;">${textoAyudaCortes(cortes.length)}</p>
+            <button class="btn small ghost" onclick="agregarCorte('${esc(c.trimestre)}')">+ Agregar parcial</button>
+          </div>
+        </div>`;
+      }).join('')}
       <button class="btn block" onclick="guardarTrimestres()">Guardar calendario</button>
     </div>`;
 }
 function guardarTrimestres() {
   const filas = [...document.querySelectorAll('[data-tri]')].map(el => ({
     trimestre: el.dataset.tri, id: el.dataset.id || null,
-    inicio: el.querySelector('.tri-inicio').value, fin: el.querySelector('.tri-fin').value, finAsistencia: el.querySelector('.tri-asis').value
+    inicio: el.querySelector('.tri-inicio').value, fin: el.querySelector('.tri-fin').value, finAsistencia: el.querySelector('.tri-asis').value,
+    cortes: [...el.querySelectorAll('.corte-fecha')].map(i => i.value)
   }));
   for (const f of filas) {
     if (!f.inicio || !f.fin) { toast(`${f.trimestre}: faltan el inicio o el fin`); return; }
@@ -374,13 +418,33 @@ function guardarTrimestres() {
   for (let i = 0; i < filas.length - 1; i++) {
     if (filas[i].finAsistencia >= filas[i + 1].inicio) { toast(`${filas[i].trimestre} y ${filas[i + 1].trimestre} se traslapan: la asistencia del primero llega hasta el ${fmtFechaCorta(filas[i].finAsistencia)}`); return; }
   }
+  for (const f of filas) {   // parciales: fechas completas, distintas y dentro del trimestre
+    if (f.cortes.some(c => !c)) { toast(`${f.trimestre}: falta la fecha de un parcial`); return; }
+    f.cortes = f.cortes.slice().sort();
+    for (let i = 0; i < f.cortes.length; i++) {
+      const c = f.cortes[i];
+      if (i > 0 && c === f.cortes[i - 1]) { toast(`${f.trimestre}: dos parciales empiezan el mismo día (${fmtFechaCorta(c)})`); return; }
+      if (c <= f.inicio || c > f.finAsistencia) { toast(`${f.trimestre}: el Parcial ${i + 2} empieza el ${fmtFechaCorta(c)}, fuera del trimestre (debe ser después del ${fmtFechaCorta(f.inicio)} y hasta el ${fmtFechaCorta(f.finAsistencia)})`); return; }
+    }
+  }
   filas.forEach(f => {
     const row = { id: f.id || uid(), cicloEscolar: CONFIG.CICLO, trimestre: f.trimestre, inicio: f.inicio, fin: f.fin, finAsistencia: f.finAsistencia };
     Store.upsertLocal('Trimestres', row);
     Store.enqueue('Trimestres', row);
+    // parciales: se reutilizan las filas ya guardadas por orden; solo se envía lo que cambió
+    const existentes = cortesDe(f.trimestre);
+    f.cortes.forEach((fecha, i) => {
+      const ex = existentes[i];
+      if (ex && ex.inicio === fecha) return;
+      const pr = { id: ex ? ex.id : uid(), cicloEscolar: CONFIG.CICLO, trimestre: f.trimestre, inicio: fecha };
+      Store.upsertLocal('Parciales', pr);
+      Store.enqueue('Parciales', pr);
+    });
+    existentes.slice(f.cortes.length).forEach(ex => { quitarPorId('Parciales', ex.id); borrarConReintento('Parciales', ex.id); });
   });
   Store.persist();
-  // el calendario cambió: la asistencia por trimestre se vuelve a pedir al servidor
+  if (ctx.periodo && !periodoActivo()) ctx.periodo = '';   // el parcial que estaba seleccionado ya no existe
+  // el calendario cambió: la asistencia por trimestre y por parcial se vuelve a pedir al servidor
   resumenAsistenciaCache = {}; resumenAsistenciaVersion = {}; resumenAsistenciaRangos = {}; resumenAsistenciaUltimoIntento = {};
   toast('Calendario guardado');
   scheduleSyncPending();
